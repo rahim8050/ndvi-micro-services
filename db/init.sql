@@ -1,0 +1,11 @@
+CREATE TABLE IF NOT EXISTS ndvi_samples (
+    id BIGSERIAL PRIMARY KEY,
+    farm_id UUID NOT NULL,
+    timestamp TIMESTAMPTZ NOT NULL,
+    mean DOUBLE PRECISION NOT NULL,
+    min DOUBLE PRECISION NOT NULL,
+    max DOUBLE PRECISION NOT NULL,
+    source TEXT,
+    geometry JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

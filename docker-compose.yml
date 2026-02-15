@@ -1,0 +1,25 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ndvi
+      POSTGRES_PASSWORD: ndvi
+      POSTGRES_DB: ndvi
+    ports:
+      - "5433:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+
+  app:
+    build: .
+    environment:
+      DATABASE_URL: postgres://ndvi:ndvi@db:5432/ndvi
+      RUST_LOG: info
+    ports:
+      - "8081:8080"
+    depends_on:
+      - db
+
+volumes:
+  db-data:
