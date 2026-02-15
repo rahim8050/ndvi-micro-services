@@ -13,9 +13,7 @@ mod routes;
 async fn main() {
     dotenv().ok();
 
-    fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .init();
+    fmt().with_env_filter(EnvFilter::from_default_env()).init();
 
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let pool = db::create_pool(&database_url)
@@ -31,7 +29,5 @@ async fn main() {
     let listener = TcpListener::bind(addr)
         .await
         .expect("failed to bind address");
-    axum::serve(listener, app)
-        .await
-        .expect("server failed");
+    axum::serve(listener, app).await.expect("server failed");
 }

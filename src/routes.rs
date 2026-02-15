@@ -46,10 +46,7 @@ async fn ndvi_info() -> impl IntoResponse {
     )
 }
 
-async fn create_ndvi(
-    State(state): State<AppState>,
-    Json(payload): Json<NdviInput>,
-) -> Response {
+async fn create_ndvi(State(state): State<AppState>, Json(payload): Json<NdviInput>) -> Response {
     if let Err(message) = payload.validate() {
         return (
             StatusCode::BAD_REQUEST,
