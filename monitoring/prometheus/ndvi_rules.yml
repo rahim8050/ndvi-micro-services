@@ -1,0 +1,20 @@
+groups:
+- name: ndvi-service.rules
+  rules:
+  - alert: NDVIServiceDown
+    expr: up{job="ndvi-service"} == 0
+    for: 2m
+    labels:
+      severity: critical
+    annotations:
+      summary: "ndvi-service is down (port 8081)"
+      description: "Prometheus target up == 0 for ndvi-service for 2m."
+
+  - alert: NDVIServiceHighErrorRate
+    expr: rate(http_requests_total{job="ndvi-service",status=~"5.."}[5m]) / rate(http_requests_total{job="ndvi-service"}[5m]) > 0.05
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "ndvi-service error rate > 5% (5m)"
+      description: "Investigate increased 5xx responses."

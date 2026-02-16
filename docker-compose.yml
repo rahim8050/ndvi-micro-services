@@ -1,6 +1,7 @@
 services:
   db:
     image: postgres:16
+    container_name: ndvi-db
     environment:
       POSTGRES_USER: ndvi
       POSTGRES_PASSWORD: ndvi
@@ -13,11 +14,13 @@ services:
 
   app:
     build: .
+    container_name: ndvi-service
     environment:
       DATABASE_URL: postgres://ndvi:ndvi@db:5432/ndvi
+      PORT: 8081
       RUST_LOG: info
     ports:
-      - "8081:8080"
+      - "8081:8081"
     depends_on:
       - db
 

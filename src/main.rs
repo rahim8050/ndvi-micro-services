@@ -6,6 +6,7 @@ use tokio::net::TcpListener;
 use tracing_subscriber::{fmt, EnvFilter};
 
 mod db;
+mod metrics;
 mod models;
 mod routes;
 
@@ -23,7 +24,11 @@ async fn main() {
     let state = db::AppState { pool };
     let app: Router = routes::router(state);
 
-    let addr: SocketAddr = "0.0.0.0:8080".parse().expect("valid address");
+    let port: u16 = env::var("PORT")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(8081);
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
     tracing::info!(%addr, "starting server");
 
     let listener = TcpListener::bind(addr)

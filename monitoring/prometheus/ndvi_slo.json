@@ -1,0 +1,21 @@
+{
+  "service": "ndvi-service",
+  "slo": {
+    "target": 0.999,
+    "window_days": 30,
+    "indicator": "success_rate",
+    "query": "1 - (sum(rate(http_requests_total{job=\"ndvi-service\",status=~\"5..\"}[30d])) / sum(rate(http_requests_total{job=\"ndvi-service\"}[30d])))"
+  },
+  "alerts": {
+    "burn_rate": {
+      "short_window": {
+        "multiplier": 14,
+        "window_minutes": 5
+      },
+      "long_window": {
+        "multiplier": 6,
+        "window_minutes": 60
+      }
+    }
+  }
+}

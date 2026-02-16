@@ -1,13 +1,14 @@
 use axum::{
     extract::State,
-    http::StatusCode,
+    http::{header, StatusCode},
+    middleware,
     response::{Html, IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
 use serde::Serialize;
 
-use crate::{db::AppState, models::NdviInput};
+use crate::{db::AppState, metrics, models::NdviInput};
 
 #[derive(Serialize)]
 struct ErrorResponse {
@@ -17,7 +18,12 @@ struct ErrorResponse {
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/", get(index))
+        .route("/healthz", get(healthz))
+        .route("/metrics", get(metrics_handler))
+        .route("/api/v1", get(api_v1_root))
+        .route("/api/v1/", get(api_v1_root))
         .route("/api/v1/ndvi", post(create_ndvi).get(ndvi_info))
+        .route_layer(middleware::from_fn(metrics::metrics_middleware))
         .with_state(state)
 }
 
@@ -34,6 +40,34 @@ async fn index() -> Html<&'static str> {
     <p>POST JSON to <code>/api/v1/ndvi</code> to ingest samples.</p>
   </body>
 </html>"#,
+    )
+}
+
+async fn healthz() -> impl IntoResponse {
+    (StatusCode::OK, Json(serde_json::json!({ "status": "ok" })))
+}
+
+async fn metrics_handler() -> Response {
+    match metrics::render_metrics() {
+        Ok(body) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, metrics::METRICS_CONTENT_TYPE)],
+            body,
+        )
+            .into_response(),
+        Err(err) => {
+            tracing::error!(error = ?err, "failed to render metrics");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+async fn api_v1_root() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "endpoints": ["/api/v1/ndvi"]
+        })),
     )
 }
 

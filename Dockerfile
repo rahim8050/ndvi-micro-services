@@ -14,5 +14,5 @@ RUN apt-get update \
 COPY --from=builder /app/target/release/ndvi-service /usr/local/bin/ndvi-service
 
 ENV RUST_LOG=info
-EXPOSE 8080
+EXPOSE 8081
 CMD ["ndvi-service"]
