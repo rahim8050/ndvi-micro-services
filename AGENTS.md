@@ -8,6 +8,14 @@ This document defines **agent roles, responsibilities, and constraints** for the
 
 Agents in this repository must **prioritize safety, determinism, and minimal change**. They should improve and maintain the service while avoiding unsafe operations (e.g., leaking secrets, breaking API contracts, or modifying infra without approval).
 
+### Service Topology (Authoritative)
+
+- **Django remains the public API gateway**.
+- **NDVI + Weather APIs are implemented here** and are consumed internally by Django.
+- **Databases remain separate**:
+  - NDVI -> Postgres
+  - Weather -> MySQL
+
 ### Agent Roles
 
 | Agent | Purpose | Scope (Allowed) | Limitations (Not Allowed) |
@@ -45,6 +53,7 @@ Agents in this repository must **prioritize safety, determinism, and minimal cha
 - **Never** commit or print secrets (API keys, tokens, passwords).
 - Use environment variables for sensitive values:
   - `DATABASE_URL` (required)
+  - `MYSQL_DATABASE_URL` (required for weather service)
   - `PORT` (default 8081)
   - `RUST_LOG` (optional)
 - For CI, use GitHub Secrets (e.g., `GITHUB_TOKEN` for GHCR).
@@ -76,6 +85,49 @@ Agents in this repository must **prioritize safety, determinism, and minimal cha
 
 > Assume all endpoints are **authenticated**. Examples below use `Authorization: Bearer $NDVI_API_TOKEN`.
 
+### Response Envelope (Django-compatible)
+
+All Rust services must match the Django envelope exactly:
+
+```json
+{
+  "status": 0,
+  "message": "OK",
+  "data": {},
+  "errors": null
+}
+```
+
+- **Success**: `status = 0`
+- **Failure**: `status = 1`
+- Do not rename fields or remove `errors` unless explicitly approved.
+
+### Auth (Required)
+
+Rust services must accept **both JWT and API keys**:
+
+- **JWT**: `Authorization: Bearer <token>`
+- **API Key**: `X-API-Key: <key>`
+
+Do not log raw tokens or API keys.
+
+### Throttling (Required, match Django)
+
+Replicate the Django throttle behavior for NDVI + weather endpoints:
+
+- **Anon**: `100/min`
+- **User**: `1000/min`
+- **API key**: `API_KEY_THROTTLE_RATE` (default `10/min`)
+- **Scoped**:
+  - `register`: `5/min`
+  - `login`: `10/min`
+  - `token_refresh`: `20/min`
+  - `password_reset`: `5/min`
+  - `password_reset_confirm`: `10/min`
+  - `nextcloud_hmac`: `API_KEY_THROTTLE_RATE` (default `10/min`)
+
+If adding throttling in Rust, prefer `tower-governor` or a similar middleware and keep rates configurable via env.
+
 ### Database
 
 - Primary table: `ndvi_samples`.
@@ -87,7 +139,7 @@ Agents in this repository must **prioritize safety, determinism, and minimal cha
 Use existing core libraries unless a new dependency is justified:
 
 - Runtime: `axum`, `tokio`
-- Data/DB: `sqlx`, `serde`, `serde_json`, `uuid`, `chrono`
+- Data/DB: `sqlx` (postgres + mysql), `serde`, `serde_json`, `uuid`, `chrono`
 - Logging/metrics: `tracing`, `tracing-subscriber`, `prometheus`, `once_cell`
 
 ### Logging & Errors
@@ -188,6 +240,17 @@ Agents must **not** attempt to add these without explicit product approval and v
 - Keep data models in `src/models.rs` and DB logic in `src/db.rs`.
 - Update `db/init.sql` and add migrations for schema changes.
 
+### Multi-Service Layout (Planned)
+
+When splitting services inside this repo, use:
+
+```
+services/ndvi/
+services/weather/
+crates/common/
+```
+
+Keep shared auth, response envelope, and metrics in `crates/common/`.
 ### Naming & Versioning
 
 - Modules: `snake_case.rs` (e.g., `metrics.rs`).
