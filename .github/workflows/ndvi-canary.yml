@@ -105,7 +105,8 @@ jobs:
         run: |
           set -euo pipefail
           sleep 30
-          curl -fsS http://127.0.0.1:8081/healthz >/dev/null
+          docker run --rm --network ndvi-canary curlimages/curl:8.6.0 \
+            -fsS http://ndvi-canary-app:8081/healthz >/dev/null
 
       - name: Promote to 50% if healthy
         env:

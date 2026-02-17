@@ -6,6 +6,7 @@ REGISTRY=${REGISTRY:-}
 REGISTRY_NAMESPACE=${REGISTRY_NAMESPACE:-}
 IMAGE_NAME=${IMAGE_NAME:-ndvi-service}
 CANARY_WEIGHT=${CANARY_WEIGHT:-}
+CURL_IMAGE=${CURL_IMAGE:-curlimages/curl:8.6.0}
 
 if [ -z "$IMAGE_TAG" ]; then
   echo "IMAGE_TAG is required" >&2
@@ -58,6 +59,24 @@ if [ "$ready" -ne 1 ]; then
   exit 1
 fi
 
+if [ -f "db/init.sql" ]; then
+  docker exec -i "$DB" psql -U ndvi -d ndvi < db/init.sql
+else
+  docker exec -i "$DB" psql -U ndvi -d ndvi <<'SQL'
+CREATE TABLE IF NOT EXISTS ndvi_samples (
+    id BIGSERIAL PRIMARY KEY,
+    farm_id UUID NOT NULL,
+    timestamp TIMESTAMPTZ NOT NULL,
+    mean DOUBLE PRECISION NOT NULL,
+    min DOUBLE PRECISION NOT NULL,
+    max DOUBLE PRECISION NOT NULL,
+    source TEXT,
+    geometry JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+SQL
+fi
+
 if docker ps -a --format '{{.Names}}' | grep -qx "$APP"; then
   docker rm -f "$APP" >/dev/null
 fi
@@ -65,28 +84,31 @@ fi
 docker run -d --name "$APP" --network "$NETWORK" \
   -e DATABASE_URL=postgres://ndvi:ndvi@${DB}:5432/ndvi \
   -e PORT=8081 \
-  -p 8081:8081 \
   "$IMAGE" >/dev/null
 
+curl_in_net() {
+  docker run --rm --network "$NETWORK" "$CURL_IMAGE" "$@"
+}
+
 for _ in $(seq 1 30); do
-  if curl -fsS http://127.0.0.1:8081/healthz >/dev/null; then
+  if curl_in_net -fsS "http://${APP}:8081/healthz" >/dev/null; then
     break
   fi
   sleep 1
 done
 
-if ! curl -fsS http://127.0.0.1:8081/healthz >/dev/null; then
+if ! curl_in_net -fsS "http://${APP}:8081/healthz" >/dev/null; then
   echo "health check failed" >&2
   docker logs "$APP" --tail 200 || true
   exit 1
 fi
 
-curl -fsS http://127.0.0.1:8081/metrics >/dev/null
+curl_in_net -fsS "http://${APP}:8081/metrics" >/dev/null
 
 payload='{"farm_id":"00000000-0000-0000-0000-000000000001","timestamp":"2025-01-01T00:00:00Z","mean":0.5,"min":0.4,"max":0.6,"source":"canary","geometry":null}'
-http_code=$(curl -s -o /dev/null -w "%{http_code}" \
+http_code=$(curl_in_net -s -o /dev/null -w "%{http_code}" \
   -H "content-type: application/json" \
-  -X POST http://127.0.0.1:8081/api/v1/ndvi \
+  -X POST "http://${APP}:8081/api/v1/ndvi" \
   -d "$payload")
 if [ "$http_code" != "201" ]; then
   echo "unexpected status: $http_code" >&2
