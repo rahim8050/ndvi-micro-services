@@ -77,6 +77,9 @@ jobs:
       REGISTRY: ghcr.io
       REGISTRY_NAMESPACE: ${{ github.repository_owner }}
       IMAGE_NAME: ndvi-service
+      # Optional: override via repository secrets or variables
+      CANARY_URL: ${{ secrets.CANARY_URL || '' }}
+      PROM_URL: ${{ secrets.PROM_URL || '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -102,11 +105,46 @@ jobs:
           ./scripts/deploy_and_smoke.sh
 
       - name: Wait & verify 10% canary
+        env:
+          IMAGE_TAG: ${{ needs.build_and_test.outputs.image_tag }}
+          CANARY_URL: ${{ env.CANARY_URL }}
+          PROM_URL: ${{ env.PROM_URL }}
         run: |
           set -euo pipefail
+          echo "Waiting for canary warmup..."
           sleep 30
-          docker run --rm --network ndvi-canary curlimages/curl:8.6.0 \
-            -fsS http://ndvi-canary-app:8081/healthz >/dev/null
+
+          # Basic health probe (keeps original behavior)
+          if [ -n "${CANARY_URL:-}" ]; then
+            base="${CANARY_URL%/}"
+            echo "Running synthetic checks against ${base}"
+            curl -fsS "${base}/healthz" >/dev/null
+            payload='{"farm_id":"00000000-0000-0000-0000-000000000001","timestamp":"2025-01-01T00:00:00Z","mean":0.5,"min":0.4,"max":0.6,"source":"canary","geometry":null}'
+            http_code=$(curl -s -o /dev/null -w "%{http_code}" \
+              -H "content-type: application/json" \
+              -X POST "${base}/api/v1/ndvi" \
+              -d "$payload")
+            if [ "$http_code" != "201" ]; then
+              echo "unexpected status: $http_code" >&2
+              exit 1
+            fi
+          else
+            # Fallback to original docker-based check (keeps original functionality)
+            docker run --rm --network ndvi-canary curlimages/curl:8.6.0 \
+              -fsS http://ndvi-canary-app:8081/healthz >/dev/null
+          fi
+
+          # Optional metrics-driven verification (no-op if PROM_URL not set)
+          if [ -n "${PROM_URL:-}" ] && [ -x ./scripts/check_metrics.sh ]; then
+            echo "Running Prometheus metrics check via scripts/check_metrics.sh"
+            ./scripts/check_metrics.sh \
+              --prom-url "${PROM_URL}" \
+              --service "ndvi-service" \
+              --error-threshold 0.01 \
+              --p95-threshold-ms 400
+          else
+            echo "PROM_URL not provided or check_metrics.sh missing; skipping metrics checks"
+          fi
 
       - name: Promote to 50% if healthy
         env:
@@ -116,6 +154,33 @@ jobs:
           set -euo pipefail
           ./scripts/deploy_and_smoke.sh
 
+      - name: Wait & verify 50% canary
+        env:
+          CANARY_URL: ${{ env.CANARY_URL }}
+          PROM_URL: ${{ env.PROM_URL }}
+        run: |
+          set -euo pipefail
+          echo "Waiting for 50% deploy warmup..."
+          sleep 20
+
+          if [ -n "${CANARY_URL:-}" ]; then
+            base="${CANARY_URL%/}"
+            curl -fsS "${base}/healthz" >/dev/null
+          else
+            docker run --rm --network ndvi-canary curlimages/curl:8.6.0 \
+              -fsS http://ndvi-canary-app:8081/healthz >/dev/null
+          fi
+
+          if [ -n "${PROM_URL:-}" ] && [ -x ./scripts/check_metrics.sh ]; then
+            ./scripts/check_metrics.sh \
+              --prom-url "${PROM_URL}" \
+              --service "ndvi-service" \
+              --error-threshold 0.01 \
+              --p95-threshold-ms 400
+          else
+            echo "PROM_URL not provided or check_metrics.sh missing; skipping metrics checks"
+          fi
+
       - name: Promote to 100% if healthy
         env:
           IMAGE_TAG: ${{ needs.build_and_test.outputs.image_tag }}
@@ -124,10 +189,32 @@ jobs:
           set -euo pipefail
           ./scripts/deploy_and_smoke.sh
 
+      - name: Wait & verify 100% deployment
+        env:
+          CANARY_URL: ${{ env.CANARY_URL }}
+          PROM_URL: ${{ env.PROM_URL }}
+        run: |
+          set -euo pipefail
+          echo "Verifying final deployment..."
+          sleep 10
+          if [ -n "${CANARY_URL:-}" ]; then
+            base="${CANARY_URL%/}"
+            curl -fsS "${base}/healthz" >/dev/null
+          else
+            docker run --rm --network ndvi-canary curlimages/curl:8.6.0 \
+              -fsS http://ndvi-canary-app:8081/healthz >/dev/null
+          fi
+
       - name: Rollback on failure (catch-all)
         if: failure()
         run: |
           echo "Rollback: restore previous stable release"
+          # NOTE: keep behavior consistent with original; call a rollback script if available
+          if [ -x ./scripts/rollback_to_previous.sh ]; then
+            ./scripts/rollback_to_previous.sh
+          else
+            echo "No rollback script found at ./scripts/rollback_to_previous.sh"
+          fi
 
       - name: Cleanup
         if: always()
