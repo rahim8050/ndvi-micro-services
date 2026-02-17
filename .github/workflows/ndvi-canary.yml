@@ -18,6 +18,13 @@ jobs:
   build_and_test:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      REGISTRY: ghcr.io
+      REGISTRY_NAMESPACE: ${{ github.repository_owner }}
+      IMAGE_NAME: ndvi-service
     outputs:
       image_tag: ${{ steps.vars.outputs.image_tag }}
     steps:
@@ -47,29 +54,47 @@ jobs:
 
       - name: Upload image to registry
         env:
-          REGISTRY: ${{ secrets.REGISTRY }}
-          REGISTRY_USER: ${{ secrets.REGISTRY_USER }}
-          REGISTRY_PASS: ${{ secrets.REGISTRY_PASS }}
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_PASS: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          if [ -z "${REGISTRY:-}" ] || [ -z "${REGISTRY_USER:-}" ] || [ -z "${REGISTRY_PASS:-}" ]; then
-            echo "registry secrets missing" >&2
+          if [ -z "${REGISTRY_USER:-}" ] || [ -z "${REGISTRY_PASS:-}" ]; then
+            echo "registry credentials missing" >&2
             exit 1
           fi
           echo "$REGISTRY_PASS" | docker login "$REGISTRY" -u "$REGISTRY_USER" --password-stdin
-          docker tag ndvi-service:${{ steps.vars.outputs.image_tag }} "$REGISTRY/ndvi-service:${{ steps.vars.outputs.image_tag }}"
-          docker push "$REGISTRY/ndvi-service:${{ steps.vars.outputs.image_tag }}"
+          image_ref="$REGISTRY/$REGISTRY_NAMESPACE/$IMAGE_NAME:${{ steps.vars.outputs.image_tag }}"
+          docker tag ndvi-service:${{ steps.vars.outputs.image_tag }} "$image_ref"
+          docker push "$image_ref"
 
   canary_deploy:
     needs: build_and_test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    env:
+      REGISTRY: ghcr.io
+      REGISTRY_NAMESPACE: ${{ github.repository_owner }}
+      IMAGE_NAME: ndvi-service
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Login to GHCR
+        env:
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_PASS: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${REGISTRY_USER:-}" ] || [ -z "${REGISTRY_PASS:-}" ]; then
+            echo "registry credentials missing" >&2
+            exit 1
+          fi
+          echo "$REGISTRY_PASS" | docker login "$REGISTRY" -u "$REGISTRY_USER" --password-stdin
+
       - name: Pull image & deploy canary (10%)
         env:
-          REGISTRY: ${{ secrets.REGISTRY }}
           IMAGE_TAG: ${{ needs.build_and_test.outputs.image_tag }}
           CANARY_WEIGHT: "10"
         run: |
@@ -84,7 +109,6 @@ jobs:
 
       - name: Promote to 50% if healthy
         env:
-          REGISTRY: ${{ secrets.REGISTRY }}
           IMAGE_TAG: ${{ needs.build_and_test.outputs.image_tag }}
           CANARY_WEIGHT: "50"
         run: |
@@ -93,7 +117,6 @@ jobs:
 
       - name: Promote to 100% if healthy
         env:
-          REGISTRY: ${{ secrets.REGISTRY }}
           IMAGE_TAG: ${{ needs.build_and_test.outputs.image_tag }}
           CANARY_WEIGHT: "100"
         run: |

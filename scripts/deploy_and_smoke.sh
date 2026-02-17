@@ -3,6 +3,8 @@ set -euo pipefail
 
 IMAGE_TAG=${IMAGE_TAG:-}
 REGISTRY=${REGISTRY:-}
+REGISTRY_NAMESPACE=${REGISTRY_NAMESPACE:-}
+IMAGE_NAME=${IMAGE_NAME:-ndvi-service}
 CANARY_WEIGHT=${CANARY_WEIGHT:-}
 
 if [ -z "$IMAGE_TAG" ]; then
@@ -14,9 +16,13 @@ if [ -n "$CANARY_WEIGHT" ]; then
   echo "Deploying canary at ${CANARY_WEIGHT}% traffic"
 fi
 
-IMAGE="ndvi-service:${IMAGE_TAG}"
+IMAGE="${IMAGE_NAME}:${IMAGE_TAG}"
 if [ -n "$REGISTRY" ]; then
-  IMAGE="$REGISTRY/ndvi-service:${IMAGE_TAG}"
+  if [ -z "$REGISTRY_NAMESPACE" ]; then
+    echo "REGISTRY_NAMESPACE is required when REGISTRY is set" >&2
+    exit 2
+  fi
+  IMAGE="$REGISTRY/$REGISTRY_NAMESPACE/${IMAGE_NAME}:${IMAGE_TAG}"
   docker pull "$IMAGE"
 fi
 
