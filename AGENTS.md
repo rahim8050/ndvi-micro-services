@@ -35,7 +35,7 @@ Agents in this repository must **prioritize safety, determinism, and minimal cha
 ### Safe vs Unsafe Actions (Examples)
 
 **Safe**
-- Add a new handler under `src/routes.rs` with validation and tests.
+- Add a new handler under `services/ndvi/src/routes.rs` or `services/weather/src/routes.rs` with validation and tests.
 - Use `DATABASE_URL` and `PORT` from environment variables.
 - Add a CI check that runs `cargo fmt` and `cargo clippy`.
 
@@ -56,6 +56,12 @@ Agents in this repository must **prioritize safety, determinism, and minimal cha
   - `MYSQL_DATABASE_URL` (required for weather service)
   - `PORT` (default 8081)
   - `RUST_LOG` (optional)
+  - `JWT_SIGNING_KEY` (required when auth enabled)
+  - `JWT_ISSUER` / `JWT_AUDIENCE` (optional)
+  - `DJANGO_API_KEY_PEPPER` (required for API key auth)
+  - `AUTH_DISABLED` (set to `true` only in local/dev or canary)
+  - `AUTH_BYPASS_PATHS` (comma-separated allowlist when needed)
+  - `THROTTLE_ENABLED`, `THROTTLE_ANON_RATE`, `THROTTLE_USER_RATE`, `API_KEY_THROTTLE_RATE`
 - For CI, use GitHub Secrets (e.g., `GITHUB_TOKEN` for GHCR).
 
 ### Network & External Access
@@ -79,11 +85,16 @@ Agents in this repository must **prioritize safety, determinism, and minimal cha
 | Method | Path | Purpose | Auth |
 |---|---|---|---|
 | `POST` | `/api/v1/ndvi` | Ingest NDVI sample | Required |
+| `GET` | `/api/v1/` | API discovery | Required |
+| `GET` | `/api/v1/weather/current/` | Weather (current) | Required |
+| `GET` | `/api/v1/weather/daily/` | Weather (daily) | Required |
+| `GET` | `/api/v1/weather/weekly/` | Weather (weekly) | Required |
 | `GET` | `/healthz` | Liveness check | Required |
 | `GET` | `/metrics` | Prometheus metrics | Required |
-| `GET` | `/api/v1/` | API discovery | Required |
 
 > Assume all endpoints are **authenticated**. Examples below use `Authorization: Bearer $NDVI_API_TOKEN`.
+>
+> Weather endpoints currently return `501 Not Implemented` until the Django migration is completed.
 
 ### Response Envelope (Django-compatible)
 
@@ -109,6 +120,10 @@ Rust services must accept **both JWT and API keys**:
 - **JWT**: `Authorization: Bearer <token>`
 - **API Key**: `X-API-Key: <key>`
 
+Auth is enforced for all endpoints unless explicitly disabled:
+- `AUTH_DISABLED=true` only for local/dev or canary smoke tests.
+- `AUTH_BYPASS_PATHS=/healthz,/metrics` can be used if monitoring requires unauthenticated access.
+
 Do not log raw tokens or API keys.
 
 ### Throttling (Required, match Django)
@@ -118,15 +133,11 @@ Replicate the Django throttle behavior for NDVI + weather endpoints:
 - **Anon**: `100/min`
 - **User**: `1000/min`
 - **API key**: `API_KEY_THROTTLE_RATE` (default `10/min`)
-- **Scoped**:
-  - `register`: `5/min`
-  - `login`: `10/min`
-  - `token_refresh`: `20/min`
-  - `password_reset`: `5/min`
-  - `password_reset_confirm`: `10/min`
-  - `nextcloud_hmac`: `API_KEY_THROTTLE_RATE` (default `10/min`)
 
-If adding throttling in Rust, prefer `tower-governor` or a similar middleware and keep rates configurable via env.
+Implementation notes:
+- The shared limiter lives in `crates/common/src/throttle.rs` and uses `governor`.
+- Scoped limits (e.g., `login`, `token_refresh`) must be enforced per-route when those endpoints are added.
+- All rates are configurable via `THROTTLE_*` env vars.
 
 ### Database
 
@@ -153,10 +164,10 @@ Use existing core libraries unless a new dependency is justified:
 
 ### Rate Limiting
 
-No rate limiter is currently enforced. If adding one:
-- Prefer `tower`/`tower-governor`.
-- Make limits configurable via environment variables.
-- Add tests to verify enforcement and error responses.
+Rate limiting is enforced via `crates/common::throttle::ThrottleLayer`:
+- Uses `governor` keyed by user/api key/IP.
+- Configure via `THROTTLE_*` env vars.
+- Add tests when adjusting limits or error handling.
 
 ---
 
@@ -236,13 +247,13 @@ Agents must **not** attempt to add these without explicit product approval and v
 ### Extending Features Safely
 
 - Add new API versions under `/api/v2/...` to avoid breaking clients.
-- Place new route handlers in `src/routes.rs` or a dedicated module if large.
-- Keep data models in `src/models.rs` and DB logic in `src/db.rs`.
-- Update `db/init.sql` and add migrations for schema changes.
+- Place new route handlers in `services/ndvi/src/routes.rs` or `services/weather/src/routes.rs`.
+- Keep data models in `services/*/src/models.rs` and DB logic in `services/*/src/db.rs`.
+- Update `db/init.sql` and add migrations for NDVI schema changes.
 
-### Multi-Service Layout (Planned)
+### Multi-Service Layout (Current)
 
-When splitting services inside this repo, use:
+This repository now uses a multi-crate layout:
 
 ```
 services/ndvi/
@@ -251,6 +262,7 @@ crates/common/
 ```
 
 Keep shared auth, response envelope, and metrics in `crates/common/`.
+The root `src/main.rs` binary delegates to `services/ndvi` for the default container build.
 ### Naming & Versioning
 
 - Modules: `snake_case.rs` (e.g., `metrics.rs`).

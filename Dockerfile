@@ -2,6 +2,9 @@ FROM rust:1.88 AS builder
 WORKDIR /app
 
 COPY Cargo.toml ./
+COPY Cargo.lock ./
+COPY crates ./crates
+COPY services ./services
 COPY src ./src
 
 RUN cargo build --release

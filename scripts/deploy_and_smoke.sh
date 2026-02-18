@@ -7,6 +7,7 @@ REGISTRY_NAMESPACE=${REGISTRY_NAMESPACE:-}
 IMAGE_NAME=${IMAGE_NAME:-ndvi-service}
 CANARY_WEIGHT=${CANARY_WEIGHT:-}
 CURL_IMAGE=${CURL_IMAGE:-curlimages/curl:8.6.0}
+AUTH_DISABLED=${AUTH_DISABLED:-true}
 
 if [ -z "$IMAGE_TAG" ]; then
   echo "IMAGE_TAG is required" >&2
@@ -84,6 +85,7 @@ fi
 docker run -d --name "$APP" --network "$NETWORK" \
   -e DATABASE_URL=postgres://ndvi:ndvi@${DB}:5432/ndvi \
   -e PORT=8081 \
+  -e AUTH_DISABLED="$AUTH_DISABLED" \
   "$IMAGE" >/dev/null
 
 curl_in_net() {

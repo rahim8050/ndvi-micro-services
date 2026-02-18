@@ -2,18 +2,14 @@ use axum::{
     extract::State,
     http::{header, StatusCode},
     middleware,
-    response::{Html, IntoResponse, Response},
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
-use serde::Serialize;
+use ndvi_common::Envelope;
+use serde_json::json;
 
 use crate::{db::AppState, metrics, models::NdviInput};
-
-#[derive(Serialize)]
-struct ErrorResponse {
-    error: String,
-}
 
 pub fn router(state: AppState) -> Router {
     Router::new()
@@ -27,24 +23,17 @@ pub fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
-async fn index() -> Html<&'static str> {
-    Html(
-        r#"<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8"/>
-    <title>NDVI Service</title>
-  </head>
-  <body>
-    <h1>NDVI Service</h1>
-    <p>POST JSON to <code>/api/v1/ndvi</code> to ingest samples.</p>
-  </body>
-</html>"#,
-    )
+async fn index() -> impl IntoResponse {
+    let body = Envelope::success(
+        "NDVI Service",
+        json!({"message": "POST JSON to /api/v1/ndvi to ingest samples"}),
+    );
+    (StatusCode::OK, Json(body))
 }
 
 async fn healthz() -> impl IntoResponse {
-    (StatusCode::OK, Json(serde_json::json!({ "status": "ok" })))
+    let body = Envelope::success("ok", json!({"status": "ok"}));
+    (StatusCode::OK, Json(body))
 }
 
 async fn metrics_handler() -> Response {
@@ -63,30 +52,22 @@ async fn metrics_handler() -> Response {
 }
 
 async fn api_v1_root() -> impl IntoResponse {
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "endpoints": ["/api/v1/ndvi"]
-        })),
-    )
+    let body = Envelope::success("ok", json!({"endpoints": ["/api/v1/ndvi"]}));
+    (StatusCode::OK, Json(body))
 }
 
 async fn ndvi_info() -> impl IntoResponse {
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "message": "POST JSON to /api/v1/ndvi to ingest NDVI samples"
-        })),
-    )
+    let body = Envelope::success(
+        "ok",
+        json!({"message": "POST JSON to /api/v1/ndvi to ingest NDVI samples"}),
+    );
+    (StatusCode::OK, Json(body))
 }
 
 async fn create_ndvi(State(state): State<AppState>, Json(payload): Json<NdviInput>) -> Response {
     if let Err(message) = payload.validate() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse { error: message }),
-        )
-            .into_response();
+        let body = Envelope::failure("Validation error", Some(json!({ "detail": message })));
+        return (StatusCode::BAD_REQUEST, Json(body)).into_response();
     }
 
     let NdviInput {
@@ -114,16 +95,15 @@ async fn create_ndvi(State(state): State<AppState>, Json(payload): Json<NdviInpu
     .await;
 
     match result {
-        Ok(_) => StatusCode::CREATED.into_response(),
+        Ok(_) => {
+            let body = Envelope::success("Created", json!({"status": "created"}));
+            (StatusCode::CREATED, Json(body)).into_response()
+        }
         Err(err) => {
             tracing::error!(error = ?err, "failed to insert ndvi sample");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: "database error".to_string(),
-                }),
-            )
-                .into_response()
+            let body =
+                Envelope::failure("Database error", Some(json!({"detail": "insert_failed"})));
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response()
         }
     }
 }

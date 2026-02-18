@@ -19,6 +19,7 @@ services:
       DATABASE_URL: postgres://ndvi:ndvi@db:5432/ndvi
       PORT: 8081
       RUST_LOG: info
+      AUTH_DISABLED: "true"
     ports:
       - "8081:8081"
     depends_on:
