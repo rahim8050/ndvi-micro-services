@@ -23,10 +23,11 @@ async fn main() {
         .expect("failed to connect to database");
 
     let config = ApiKeyConfig::from_env().expect("DJANGO_API_KEY_PEPPER must be set");
-    let api_key_validator = Some(Arc::new(MySqlApiKeyValidator {
-        pool: pool.clone(),
-        config,
-    }));
+    let api_key_validator: Option<Arc<dyn ndvi_common::auth::ApiKeyValidator>> =
+        Some(Arc::new(MySqlApiKeyValidator {
+            pool: pool.clone(),
+            config,
+        }) as Arc<dyn ndvi_common::auth::ApiKeyValidator>);
     let auth_state = AuthState::from_env(api_key_validator).expect("failed to configure auth");
     let throttle_layer = ThrottleLayer::from_env();
 

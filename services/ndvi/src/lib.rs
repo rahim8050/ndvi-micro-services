@@ -24,21 +24,23 @@ pub async fn run() {
         .await
         .expect("failed to connect to database");
 
-    let api_key_validator = match env::var("MYSQL_DATABASE_URL") {
-        Ok(mysql_url) => {
-            let mysql_pool = MySqlPoolOptions::new()
-                .max_connections(5)
-                .connect(&mysql_url)
-                .await
-                .expect("failed to connect to mysql for api key validation");
-            let config = ApiKeyConfig::from_env().expect("DJANGO_API_KEY_PEPPER must be set");
-            Some(Arc::new(MySqlApiKeyValidator {
-                pool: mysql_pool,
-                config,
-            }))
-        }
-        Err(_) => None,
-    };
+    let api_key_validator: Option<Arc<dyn ndvi_common::auth::ApiKeyValidator>> =
+        match env::var("MYSQL_DATABASE_URL") {
+            Ok(mysql_url) => {
+                let mysql_pool = MySqlPoolOptions::new()
+                    .max_connections(5)
+                    .connect(&mysql_url)
+                    .await
+                    .expect("failed to connect to mysql for api key validation");
+                let config = ApiKeyConfig::from_env().expect("DJANGO_API_KEY_PEPPER must be set");
+                Some(Arc::new(MySqlApiKeyValidator {
+                    pool: mysql_pool,
+                    config,
+                })
+                    as Arc<dyn ndvi_common::auth::ApiKeyValidator>)
+            }
+            Err(_) => None,
+        };
     let auth_state = AuthState::from_env(api_key_validator).expect("failed to configure auth");
     let throttle_layer = ThrottleLayer::from_env();
 
