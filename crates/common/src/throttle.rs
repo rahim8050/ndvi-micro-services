@@ -44,7 +44,6 @@ impl ThrottleConfig {
     }
 }
 
-#[derive(Clone)]
 pub struct ThrottleState {
     enabled: bool,
     anon: RateLimiter<String, DashMapStateStore<String>, DefaultClock>,
@@ -120,6 +119,7 @@ impl<S, B> Service<Request<B>> for ThrottleService<S>
 where
     S: Service<Request<B>, Response = Response> + Clone + Send + 'static,
     S::Future: Send + 'static,
+    B: Send + 'static,
 {
     type Response = S::Response;
     type Error = S::Error;

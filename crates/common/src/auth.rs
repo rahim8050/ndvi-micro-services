@@ -12,6 +12,7 @@ use subtle::ConstantTimeEq;
 
 use crate::Envelope;
 use axum::{
+    body::Body,
     extract::State,
     middleware::Next,
     response::{IntoResponse, Response},
@@ -283,18 +284,18 @@ pub async fn authenticate_request(
     Err(AuthError::Missing)
 }
 
-pub fn header_from_request<B>(req: &http::Request<B>, name: &str) -> Option<String> {
+pub fn header_from_request(req: &http::Request<Body>, name: &str) -> Option<String> {
     req.headers()
         .get(name)
         .and_then(|value| value.to_str().ok())
         .map(|value| value.to_string())
 }
 
-pub fn auth_header<B>(req: &http::Request<B>) -> Option<String> {
+pub fn auth_header(req: &http::Request<Body>) -> Option<String> {
     header_from_request(req, http::header::AUTHORIZATION.as_str())
 }
 
-pub fn api_key_header<B>(req: &http::Request<B>) -> Option<String> {
+pub fn api_key_header(req: &http::Request<Body>) -> Option<String> {
     header_from_request(req, "x-api-key")
 }
 
@@ -328,9 +329,9 @@ impl AuthState {
     }
 }
 
-pub async fn auth_middleware<B>(
+pub async fn auth_middleware(
     State(state): State<AuthState>,
-    mut req: Request<B>,
+    mut req: Request<Body>,
     next: Next,
 ) -> Response {
     if !state.enabled {
