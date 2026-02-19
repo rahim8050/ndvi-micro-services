@@ -97,6 +97,7 @@ pub enum AuthError {
 #[derive(Debug, Deserialize)]
 struct Claims {
     sub: String,
+    #[allow(dead_code)]
     exp: usize,
 }
 
@@ -390,5 +391,5 @@ fn is_bypass_path(path: &str) -> bool {
         .map(|p| p.trim())
         .filter(|p| !p.is_empty())
         .collect();
-    paths.iter().any(|p| *p == path)
+    paths.contains(&path)
 }
