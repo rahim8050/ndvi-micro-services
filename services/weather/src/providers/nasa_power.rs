@@ -156,7 +156,8 @@ impl NasaPowerProvider {
 
 fn parse_day_to_local(raw: &str, tz: Tz) -> Option<NaiveDate> {
     let parsed = NaiveDate::parse_from_str(raw, "%Y%m%d").ok()?;
-    let utc_dt: DateTime<Utc> = DateTime::<Utc>::from_utc(parsed.and_hms_opt(0, 0, 0)?, Utc);
+    let naive = parsed.and_hms_opt(0, 0, 0)?;
+    let utc_dt: DateTime<Utc> = Utc.from_utc_datetime(&naive);
     Some(utc_dt.with_timezone(&tz).date_naive())
 }
 

@@ -202,7 +202,7 @@ fn parse_base_params(
     let (tz, tz_name) = match config.resolve_tz(tz_value) {
         Ok(value) => value,
         Err(message) => {
-            push_error(&mut errors, "tz", message);
+            push_error(&mut errors, "tz", &message);
             (config.default_tz, config.default_tz_name.clone())
         }
     };
