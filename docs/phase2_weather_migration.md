@@ -12,7 +12,7 @@ Implement weather endpoints in Rust with functional parity to the Django service
   - `/api/v1/weather/current/`
   - `/api/v1/weather/daily/`
   - `/api/v1/weather/weekly/`
-- Use MySQL for weather data access (no schema changes unless explicitly approved).
+- Use the same upstream providers as Django (Open-Meteo and NASA POWER).
 - Preserve response envelope (`status`, `message`, `data`, `errors`).
 - Keep auth (JWT + API key) and throttling enabled for all routes.
 
@@ -21,8 +21,11 @@ Implement weather endpoints in Rust with functional parity to the Django service
 ### Data access
 
 - Define models/DTOs for each weather response shape.
-- Implement parameterized queries in `services/weather/src/db.rs`.
-- Keep SQL and field names aligned with existing Django expectations.
+- Implement provider clients in `services/weather/src/providers/`.
+- Keep provider parameters aligned with Django settings:
+  - `OPEN_METEO_BASE_URL`
+  - `NASA_POWER_BASE_URL`
+  - `WEATHER_NASA_POWER_COMMUNITY`
 
 ### API handlers
 
@@ -30,7 +33,7 @@ Implement weather endpoints in Rust with functional parity to the Django service
 - Validate inputs (lat/lon ranges, required params).
 - Use consistent error mapping:
   - 400 for validation
-  - 500 for DB/unknown
+  - 502 for upstream/provider failures
 
 ### Metrics + logging
 
@@ -50,6 +53,10 @@ Implement weather endpoints in Rust with functional parity to the Django service
 
 ## Phase 2 outputs
 
-- Weather endpoints return real data (no 501).
+- Weather endpoints return real data (no 501), backed by Open-Meteo and NASA POWER.
 - Updated tests and docs for weather API behavior.
 - CI green with `cargo fmt`, `clippy`, `test`.
+
+## Status
+
+Complete (Phase 2 implemented in Rust weather service).

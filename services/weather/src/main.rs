@@ -8,8 +8,14 @@ use tokio::net::TcpListener;
 use tower::ServiceBuilder;
 use tracing_subscriber::{fmt, EnvFilter};
 
+mod config;
 mod db;
+mod metrics;
+mod providers;
 mod routes;
+mod services;
+mod state;
+mod types;
 
 #[tokio::main]
 async fn main() {
@@ -22,6 +28,9 @@ async fn main() {
         .await
         .expect("failed to connect to database");
 
+    let weather_config = config::WeatherConfig::from_env().expect("invalid weather configuration");
+    let providers = providers::Providers::from_env();
+
     let config = ApiKeyConfig::from_env().expect("DJANGO_API_KEY_PEPPER must be set");
     let api_key_validator: Option<Arc<dyn ndvi_common::auth::ApiKeyValidator>> =
         Some(Arc::new(MySqlApiKeyValidator {
@@ -31,7 +40,11 @@ async fn main() {
     let auth_state = AuthState::from_env(api_key_validator).expect("failed to configure auth");
     let throttle_layer = ThrottleLayer::from_env();
 
-    let state = db::AppState { pool };
+    let state = state::AppState {
+        pool,
+        config: weather_config,
+        providers,
+    };
     let app: Router =
         routes::router(state).layer(ServiceBuilder::new().layer(throttle_layer).layer(
             middleware::from_fn_with_state(auth_state, ndvi_common::auth::auth_middleware),

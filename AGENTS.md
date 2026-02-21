@@ -62,6 +62,9 @@ Agents in this repository must **prioritize safety, determinism, and minimal cha
   - `AUTH_DISABLED` (set to `true` only in local/dev or canary)
   - `AUTH_BYPASS_PATHS` (comma-separated allowlist when needed)
   - `THROTTLE_ENABLED`, `THROTTLE_ANON_RATE`, `THROTTLE_USER_RATE`, `API_KEY_THROTTLE_RATE`
+  - `WEATHER_PROVIDER_DEFAULT`, `WEATHER_DEFAULT_TZ`, `WEATHER_MAX_RANGE_DAYS`
+  - `OPEN_METEO_BASE_URL`, `NASA_POWER_BASE_URL`
+  - `WEATHER_NASA_POWER_COMMUNITY`, `NASA_POWER_DAILY_LAG_DAYS`
 - For CI, use GitHub Secrets (e.g., `GITHUB_TOKEN` for GHCR).
 
 ### Network & External Access
@@ -94,7 +97,6 @@ Agents in this repository must **prioritize safety, determinism, and minimal cha
 
 > Assume all endpoints are **authenticated**. Examples below use `Authorization: Bearer $NDVI_API_TOKEN`.
 >
-> Weather endpoints currently return `501 Not Implemented` until the Django migration is completed.
 
 ### Response Envelope (Django-compatible)
 

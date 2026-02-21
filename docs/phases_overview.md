@@ -8,12 +8,12 @@ Date: 2026-02-19
 |---|---|---|---|
 | 0 | Contract freeze | Complete | Frozen NDVI + weather contracts from Django |
 | 1 | Multi-service + shared auth/throttle | Complete | Rust workspace, shared auth/throttle, NDVI envelope |
-| 2 | Weather migration | Planned | Weather endpoints implemented in Rust |
+| 2 | Weather migration | Complete | Weather endpoints implemented in Rust |
 | 3 | Gateway cutover | Planned | Django routes to Rust services with canary |
 
 ## How many phases remain?
 
-Two planned phases remain: Phase 2 and Phase 3.
+One planned phase remains: Phase 3.
 
 ## End state (after Phase 3)
 
