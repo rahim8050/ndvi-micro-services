@@ -17,7 +17,7 @@ This repository hosts Rust microservices that back NDVI and weather endpoints. D
 ```
 crates/common/        # shared envelope, auth, throttling
 services/ndvi/        # NDVI service implementation
-services/weather/     # Weather service (stubs in Phase 1)
+services/weather/     # Weather service implementation
 src/main.rs           # root binary delegates to services/ndvi
 db/init.sql           # NDVI schema
 scripts/              # canary and smoke tooling
