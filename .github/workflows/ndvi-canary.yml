@@ -25,6 +25,7 @@ jobs:
       REGISTRY: ghcr.io
       REGISTRY_NAMESPACE: ${{ github.repository_owner }}
       IMAGE_NAME: ndvi-service
+      WEATHER_IMAGE_NAME: weather-service
     outputs:
       image_tag: ${{ steps.vars.outputs.image_tag }}
     steps:
@@ -44,6 +45,11 @@ jobs:
         run: |
           set -euo pipefail
           docker build -t ndvi-service:${{ steps.vars.outputs.image_tag }} .
+
+      - name: Build weather image
+        run: |
+          set -euo pipefail
+          docker build -f Dockerfile.weather -t weather-service:${{ steps.vars.outputs.image_tag }} .
 
       - name: Run unit tests
         run: |
@@ -66,6 +72,9 @@ jobs:
           image_ref="$REGISTRY/$REGISTRY_NAMESPACE/$IMAGE_NAME:${{ steps.vars.outputs.image_tag }}"
           docker tag ndvi-service:${{ steps.vars.outputs.image_tag }} "$image_ref"
           docker push "$image_ref"
+          weather_ref="$REGISTRY/$REGISTRY_NAMESPACE/$WEATHER_IMAGE_NAME:${{ steps.vars.outputs.image_tag }}"
+          docker tag weather-service:${{ steps.vars.outputs.image_tag }} "$weather_ref"
+          docker push "$weather_ref"
 
   canary_deploy:
     needs: build_and_test
@@ -77,9 +86,12 @@ jobs:
       REGISTRY: ghcr.io
       REGISTRY_NAMESPACE: ${{ github.repository_owner }}
       IMAGE_NAME: ndvi-service
+      WEATHER_IMAGE_NAME: weather-service
       # Optional: override via repository secrets or variables
       CANARY_URL: ${{ secrets.CANARY_URL || '' }}
       PROM_URL: ${{ secrets.PROM_URL || '' }}
+      WEATHER_SMOKE_MODE: ${{ vars.WEATHER_SMOKE_MODE || 'health' }}
+      WEATHER_SMOKE_PROVIDER: ${{ vars.WEATHER_SMOKE_PROVIDER || 'open_meteo' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -103,6 +115,17 @@ jobs:
         run: |
           set -euo pipefail
           ./scripts/deploy_and_smoke.sh
+
+      - name: Pull weather image & deploy canary (10%)
+        env:
+          IMAGE_TAG: ${{ needs.build_and_test.outputs.image_tag }}
+          IMAGE_NAME: ${{ env.WEATHER_IMAGE_NAME }}
+          CANARY_WEIGHT: "10"
+          WEATHER_SMOKE_MODE: ${{ env.WEATHER_SMOKE_MODE }}
+          WEATHER_SMOKE_PROVIDER: ${{ env.WEATHER_SMOKE_PROVIDER }}
+        run: |
+          set -euo pipefail
+          ./scripts/deploy_and_smoke_weather.sh
 
       - name: Wait & verify 10% canary
         env:
@@ -154,6 +177,17 @@ jobs:
           set -euo pipefail
           ./scripts/deploy_and_smoke.sh
 
+      - name: Promote weather to 50% if healthy
+        env:
+          IMAGE_TAG: ${{ needs.build_and_test.outputs.image_tag }}
+          IMAGE_NAME: ${{ env.WEATHER_IMAGE_NAME }}
+          CANARY_WEIGHT: "50"
+          WEATHER_SMOKE_MODE: ${{ env.WEATHER_SMOKE_MODE }}
+          WEATHER_SMOKE_PROVIDER: ${{ env.WEATHER_SMOKE_PROVIDER }}
+        run: |
+          set -euo pipefail
+          ./scripts/deploy_and_smoke_weather.sh
+
       - name: Wait & verify 50% canary
         env:
           CANARY_URL: ${{ env.CANARY_URL }}
@@ -188,6 +222,17 @@ jobs:
         run: |
           set -euo pipefail
           ./scripts/deploy_and_smoke.sh
+
+      - name: Promote weather to 100% if healthy
+        env:
+          IMAGE_TAG: ${{ needs.build_and_test.outputs.image_tag }}
+          IMAGE_NAME: ${{ env.WEATHER_IMAGE_NAME }}
+          CANARY_WEIGHT: "100"
+          WEATHER_SMOKE_MODE: ${{ env.WEATHER_SMOKE_MODE }}
+          WEATHER_SMOKE_PROVIDER: ${{ env.WEATHER_SMOKE_PROVIDER }}
+        run: |
+          set -euo pipefail
+          ./scripts/deploy_and_smoke_weather.sh
 
       - name: Wait & verify 100% deployment
         env:

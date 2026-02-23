@@ -20,6 +20,7 @@ Route NDVI + weather traffic through Django to the Rust services, with canary ro
 - Added `docker-compose.pilot.yml` to run NDVI + Weather + Postgres + MySQL in one shot.
 - Added `.env.example` with all required variables for compact piloting.
 - Updated README with pilot instructions.
+- Canary workflow now builds/pushes NDVI + weather images and runs weather smoke checks.
 
 ## Implementation checklist
 
