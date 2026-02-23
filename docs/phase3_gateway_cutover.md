@@ -13,6 +13,13 @@ Route NDVI + weather traffic through Django to the Rust services, with canary ro
   - NDVI -> Postgres
   - Weather -> MySQL
 - Maintain auth + throttling policies.
+-
+## Implemented in this repo
+
+- Added `Dockerfile.weather` for the weather service binary.
+- Added `docker-compose.pilot.yml` to run NDVI + Weather + Postgres + MySQL in one shot.
+- Added `.env.example` with all required variables for compact piloting.
+- Updated README with pilot instructions.
 
 ## Implementation checklist
 
@@ -44,3 +51,7 @@ Route NDVI + weather traffic through Django to the Rust services, with canary ro
 - Django gateway uses Rust services as the backend of record.
 - Production-ready routing, canary, and alerting in place.
 - Django no longer serves NDVI/Weather logic directly.
+
+## Status
+
+Implemented (gateway cutover artifacts + pilot environment are ready in this repo).

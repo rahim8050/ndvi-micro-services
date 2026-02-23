@@ -91,6 +91,13 @@ export JWT_SIGNING_KEY="(set securely)"
 cargo run -p weather-service
 ```
 
+### Compact pilot (NDVI + Weather + DBs)
+
+```sh
+cp .env.example .env
+docker compose -f docker-compose.pilot.yml up --build
+```
+
 ## CI
 
 GitHub Actions runs:
