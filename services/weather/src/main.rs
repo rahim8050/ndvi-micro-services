@@ -31,12 +31,18 @@ async fn main() {
     let weather_config = config::WeatherConfig::from_env().expect("invalid weather configuration");
     let providers = providers::Providers::from_env();
 
-    let config = ApiKeyConfig::from_env().expect("DJANGO_API_KEY_PEPPER must be set");
-    let api_key_validator: Option<Arc<dyn ndvi_common::auth::ApiKeyValidator>> =
+    let auth_disabled = env::var("AUTH_DISABLED")
+        .map(|value| value == "1" || value.to_lowercase() == "true")
+        .unwrap_or(false);
+    let api_key_validator: Option<Arc<dyn ndvi_common::auth::ApiKeyValidator>> = if auth_disabled {
+        None
+    } else {
+        let config = ApiKeyConfig::from_env().expect("DJANGO_API_KEY_PEPPER must be set");
         Some(Arc::new(MySqlApiKeyValidator {
             pool: pool.clone(),
             config,
-        }) as Arc<dyn ndvi_common::auth::ApiKeyValidator>);
+        }) as Arc<dyn ndvi_common::auth::ApiKeyValidator>)
+    };
     let auth_state = AuthState::from_env(api_key_validator).expect("failed to configure auth");
     let throttle_layer = ThrottleLayer::from_env();
 

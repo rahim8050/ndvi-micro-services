@@ -24,7 +24,12 @@ pub async fn run() {
         .await
         .expect("failed to connect to database");
 
-    let api_key_validator: Option<Arc<dyn ndvi_common::auth::ApiKeyValidator>> =
+    let auth_disabled = env::var("AUTH_DISABLED")
+        .map(|value| value == "1" || value.to_lowercase() == "true")
+        .unwrap_or(false);
+    let api_key_validator: Option<Arc<dyn ndvi_common::auth::ApiKeyValidator>> = if auth_disabled {
+        None
+    } else {
         match env::var("MYSQL_DATABASE_URL") {
             Ok(mysql_url) => {
                 let mysql_pool = MySqlPoolOptions::new()
@@ -40,7 +45,8 @@ pub async fn run() {
                     as Arc<dyn ndvi_common::auth::ApiKeyValidator>)
             }
             Err(_) => None,
-        };
+        }
+    };
     let auth_state = AuthState::from_env(api_key_validator).expect("failed to configure auth");
     let throttle_layer = ThrottleLayer::from_env();
 
