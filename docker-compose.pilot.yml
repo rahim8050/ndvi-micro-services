@@ -1,7 +1,6 @@
 services:
   ndvi-db:
     image: postgres:16
-    container_name: ndvi-db
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -14,7 +13,6 @@ services:
 
   weather-db:
     image: mysql:8.0
-    container_name: weather-db
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: ${MYSQL_DATABASE}
@@ -27,7 +25,6 @@ services:
 
   ndvi-service:
     build: .
-    container_name: ndvi-service
     env_file: .env
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@ndvi-db:5432/${POSTGRES_DB}
@@ -41,7 +38,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.weather
-    container_name: weather-service
     env_file: .env
     environment:
       MYSQL_DATABASE_URL: mysql://${MYSQL_USER}:${MYSQL_PASSWORD}@weather-db:3306/${MYSQL_DATABASE}
