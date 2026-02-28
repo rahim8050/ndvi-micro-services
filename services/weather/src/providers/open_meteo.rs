@@ -92,7 +92,8 @@ impl OpenMeteoProvider {
             ("end_date", end.to_string()),
             (
                 "daily",
-                "temperature_2m_min,temperature_2m_max,precipitation_sum".to_string(),
+                "temperature_2m_min,temperature_2m_max,precipitation_sum,wind_speed_10m_max"
+                    .to_string(),
             ),
             ("timezone", loc.tz_name.clone()),
         ];
@@ -103,6 +104,7 @@ impl OpenMeteoProvider {
         let t_min_list = daily_block.and_then(|obj| obj.get("temperature_2m_min"));
         let t_max_list = daily_block.and_then(|obj| obj.get("temperature_2m_max"));
         let precip_list = daily_block.and_then(|obj| obj.get("precipitation_sum"));
+        let wind_max_list = daily_block.and_then(|obj| obj.get("wind_speed_10m_max"));
 
         let mut forecasts = Vec::new();
         let date_values = dates
@@ -120,6 +122,7 @@ impl OpenMeteoProvider {
                 t_min_c: t_min,
                 t_max_c: t_max,
                 precipitation_mm: precip,
+                wind_speed_max_mps: list_value(wind_max_list, idx),
                 source: ProviderName::OpenMeteo,
             });
         }

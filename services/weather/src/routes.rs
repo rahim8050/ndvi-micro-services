@@ -383,6 +383,7 @@ struct DailyForecastResponse {
     t_min_c: Option<f64>,
     t_max_c: Option<f64>,
     precipitation_mm: Option<f64>,
+    wind_speed_max_mps: Option<f64>,
     is_partial: bool,
     missing_fields: Vec<String>,
     source: String,
@@ -397,6 +398,7 @@ impl DailyForecastResponse {
             t_min_c: value.t_min_c,
             t_max_c: value.t_max_c,
             precipitation_mm: value.precipitation_mm,
+            wind_speed_max_mps: value.wind_speed_max_mps,
             is_partial,
             missing_fields: missing.iter().map(|field| field.to_string()).collect(),
             source: value.source.as_str().to_string(),
@@ -455,4 +457,64 @@ impl WeeklyReportResponse {
 #[derive(Serialize)]
 struct WeatherWeeklyData {
     reports: Vec<WeeklyReportResponse>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::NaiveDate;
+
+    #[test]
+    fn daily_forecast_response_includes_wind_speed_max_mps() {
+        let config = WeatherConfig {
+            default_tz: "Africa/Nairobi".parse().expect("valid timezone"),
+            default_tz_name: "Africa/Nairobi".to_string(),
+            max_range_days: 366,
+            provider_default: ProviderName::OpenMeteo,
+            nasa_power_daily_lag_days: 2,
+        };
+        let forecast = DailyForecast {
+            day: NaiveDate::from_ymd_opt(2026, 2, 28).expect("valid date"),
+            t_min_c: Some(10.0),
+            t_max_c: Some(20.0),
+            precipitation_mm: Some(1.2),
+            wind_speed_max_mps: Some(6.5),
+            source: ProviderName::OpenMeteo,
+        };
+
+        let response = DailyForecastResponse::from(
+            &forecast,
+            &config,
+            NaiveDate::from_ymd_opt(2026, 2, 28).expect("valid date"),
+        );
+        let json = serde_json::to_value(response).expect("serializes");
+        assert_eq!(json["wind_speed_max_mps"].as_f64(), Some(6.5));
+    }
+
+    #[test]
+    fn daily_forecast_response_serializes_null_wind_speed_max_mps() {
+        let config = WeatherConfig {
+            default_tz: "Africa/Nairobi".parse().expect("valid timezone"),
+            default_tz_name: "Africa/Nairobi".to_string(),
+            max_range_days: 366,
+            provider_default: ProviderName::NasaPower,
+            nasa_power_daily_lag_days: 2,
+        };
+        let forecast = DailyForecast {
+            day: NaiveDate::from_ymd_opt(2026, 2, 28).expect("valid date"),
+            t_min_c: Some(10.0),
+            t_max_c: Some(20.0),
+            precipitation_mm: Some(1.2),
+            wind_speed_max_mps: None,
+            source: ProviderName::NasaPower,
+        };
+
+        let response = DailyForecastResponse::from(
+            &forecast,
+            &config,
+            NaiveDate::from_ymd_opt(2026, 2, 28).expect("valid date"),
+        );
+        let json = serde_json::to_value(response).expect("serializes");
+        assert!(json["wind_speed_max_mps"].is_null());
+    }
 }

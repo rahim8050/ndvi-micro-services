@@ -50,6 +50,7 @@ pub struct DailyForecast {
     pub t_min_c: Option<f64>,
     pub t_max_c: Option<f64>,
     pub precipitation_mm: Option<f64>,
+    pub wind_speed_max_mps: Option<f64>,
     pub source: ProviderName,
 }
 

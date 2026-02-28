@@ -114,6 +114,7 @@ impl NasaPowerProvider {
                 t_min_c: t_min,
                 t_max_c: t_max,
                 precipitation_mm: precipitation,
+                wind_speed_max_mps: None,
                 source: ProviderName::NasaPower,
             });
         }
