@@ -7,6 +7,9 @@ pub struct WeatherConfig {
     pub max_range_days: i64,
     pub provider_default: ProviderName,
     pub nasa_power_daily_lag_days: i64,
+    pub cache_ttl_current_s: u64,
+    pub cache_ttl_daily_s: u64,
+    pub cache_ttl_weekly_s: u64,
 }
 
 impl WeatherConfig {
@@ -32,6 +35,18 @@ impl WeatherConfig {
             .ok()
             .and_then(|value| value.parse::<i64>().ok())
             .unwrap_or(2);
+        let cache_ttl_current_s = std::env::var("WEATHER_CACHE_TTL_CURRENT_S")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(120);
+        let cache_ttl_daily_s = std::env::var("WEATHER_CACHE_TTL_DAILY_S")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(900);
+        let cache_ttl_weekly_s = std::env::var("WEATHER_CACHE_TTL_WEEKLY_S")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(1800);
 
         Ok(Self {
             default_tz,
@@ -39,6 +54,9 @@ impl WeatherConfig {
             max_range_days,
             provider_default,
             nasa_power_daily_lag_days,
+            cache_ttl_current_s,
+            cache_ttl_daily_s,
+            cache_ttl_weekly_s,
         })
     }
 

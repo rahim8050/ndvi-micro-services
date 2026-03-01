@@ -34,7 +34,10 @@ services:
       retries: 20
 
   ndvi-service:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
     env_file: .env
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@ndvi-db:5432/${POSTGRES_DB}
@@ -50,6 +53,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.weather
+      target: runtime
     env_file: .env
     environment:
       MYSQL_DATABASE_URL: mysql://${MYSQL_USER}:${MYSQL_PASSWORD}@weather-db:3306/${MYSQL_DATABASE}

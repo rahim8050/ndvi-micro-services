@@ -58,10 +58,23 @@ async fn weather_current(
         Err(response) => return response,
     };
 
-    let location = params.location();
-    let current = match services::get_current(&state.providers, params.provider, &location).await {
-        Ok(value) => value,
-        Err(err) => return provider_error(err),
+    let cache_key = format!("weather:current:{}", params.cache_key_segment());
+    let current = match state.cache.get_current(&cache_key) {
+        Some(value) => value,
+        None => {
+            let location = params.location();
+            match services::get_current(&state.providers, params.provider, &location).await {
+                Ok(value) => {
+                    state.cache.set_current(
+                        cache_key,
+                        value.clone(),
+                        state.config.cache_ttl_current_s,
+                    );
+                    value
+                }
+                Err(err) => return provider_error(err),
+            }
+        }
     };
 
     let payload = CurrentWeatherResponse::from(current);
@@ -78,18 +91,29 @@ async fn weather_daily(
         Err(response) => return response,
     };
 
-    let location = params.base.location();
-    let forecasts = match services::get_daily(
-        &state.providers,
-        params.base.provider,
-        &location,
-        params.start,
-        params.end,
-    )
-    .await
-    {
-        Ok(value) => value,
-        Err(err) => return provider_error(err),
+    let cache_key = format!("weather:daily:{}", params.cache_key_segment());
+    let forecasts = match state.cache.get_daily(&cache_key) {
+        Some(value) => value,
+        None => {
+            let location = params.base.location();
+            match services::get_daily(
+                &state.providers,
+                params.base.provider,
+                &location,
+                params.start,
+                params.end,
+            )
+            .await
+            {
+                Ok(value) => {
+                    state
+                        .cache
+                        .set_daily(cache_key, value.clone(), state.config.cache_ttl_daily_s);
+                    value
+                }
+                Err(err) => return provider_error(err),
+            }
+        }
     };
 
     let today = Utc::now()
@@ -114,21 +138,45 @@ async fn weather_weekly(
         Err(response) => return response,
     };
 
-    let location = params.base.location();
-    let forecasts = match services::get_daily(
-        &state.providers,
-        params.base.provider,
-        &location,
-        params.start,
-        params.end,
-    )
-    .await
-    {
-        Ok(value) => value,
-        Err(err) => return provider_error(err),
+    let weekly_cache_key = format!("weather:weekly:{}", params.cache_key_segment());
+    let reports = match state.cache.get_weekly(&weekly_cache_key) {
+        Some(value) => value,
+        None => {
+            let daily_cache_key = format!("weather:daily:{}", params.cache_key_segment());
+            let forecasts = match state.cache.get_daily(&daily_cache_key) {
+                Some(value) => value,
+                None => {
+                    let location = params.base.location();
+                    match services::get_daily(
+                        &state.providers,
+                        params.base.provider,
+                        &location,
+                        params.start,
+                        params.end,
+                    )
+                    .await
+                    {
+                        Ok(value) => {
+                            state.cache.set_daily(
+                                daily_cache_key,
+                                value.clone(),
+                                state.config.cache_ttl_daily_s,
+                            );
+                            value
+                        }
+                        Err(err) => return provider_error(err),
+                    }
+                }
+            };
+            let generated = services::aggregate_weekly(&forecasts, params.base.provider);
+            state.cache.set_weekly(
+                weekly_cache_key,
+                generated.clone(),
+                state.config.cache_ttl_weekly_s,
+            );
+            generated
+        }
     };
-
-    let reports = services::aggregate_weekly(&forecasts, params.base.provider);
     let today = Utc::now()
         .with_timezone(&state.config.default_tz)
         .date_naive();
@@ -182,12 +230,33 @@ impl ValidatedBaseParams {
             tz_name: self.tz_name.clone(),
         }
     }
+
+    fn cache_key_segment(&self) -> String {
+        format!(
+            "{}:{:.4}:{:.4}:{}",
+            self.provider.as_str(),
+            self.lat,
+            self.lon,
+            self.tz_name
+        )
+    }
 }
 
 struct ValidatedRangeParams {
     base: ValidatedBaseParams,
     start: NaiveDate,
     end: NaiveDate,
+}
+
+impl ValidatedRangeParams {
+    fn cache_key_segment(&self) -> String {
+        format!(
+            "{}:{}:{}",
+            self.base.cache_key_segment(),
+            self.start,
+            self.end
+        )
+    }
 }
 
 fn parse_base_params(
@@ -472,6 +541,9 @@ mod tests {
             max_range_days: 366,
             provider_default: ProviderName::OpenMeteo,
             nasa_power_daily_lag_days: 2,
+            cache_ttl_current_s: 120,
+            cache_ttl_daily_s: 900,
+            cache_ttl_weekly_s: 1800,
         };
         let forecast = DailyForecast {
             day: NaiveDate::from_ymd_opt(2026, 2, 28).expect("valid date"),
@@ -499,6 +571,9 @@ mod tests {
             max_range_days: 366,
             provider_default: ProviderName::NasaPower,
             nasa_power_daily_lag_days: 2,
+            cache_ttl_current_s: 120,
+            cache_ttl_daily_s: 900,
+            cache_ttl_weekly_s: 1800,
         };
         let forecast = DailyForecast {
             day: NaiveDate::from_ymd_opt(2026, 2, 28).expect("valid date"),

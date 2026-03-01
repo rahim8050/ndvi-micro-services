@@ -8,6 +8,7 @@ use tokio::net::TcpListener;
 use tower::ServiceBuilder;
 use tracing_subscriber::{fmt, EnvFilter};
 
+mod cache;
 mod config;
 mod db;
 mod metrics;
@@ -50,6 +51,7 @@ async fn main() {
         pool,
         config: weather_config,
         providers,
+        cache: cache::WeatherResponseCache::new(),
     };
     let app: Router =
         routes::router(state).layer(ServiceBuilder::new().layer(throttle_layer).layer(
