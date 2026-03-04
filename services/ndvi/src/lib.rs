@@ -4,9 +4,10 @@ use axum::{middleware, Router};
 use dotenvy::dotenv;
 use ndvi_common::auth::{ApiKeyConfig, AuthState, MySqlApiKeyValidator};
 use ndvi_common::throttle::ThrottleLayer;
-use sqlx::mysql::MySqlPool;
-use sqlx::mysql::{MySqlPool, MySqlPoolOptions};
-use sqlx::PgPool;
+use sqlx::{
+    mysql::{MySqlPool, MySqlPoolOptions},
+    PgPool,
+};
 use tokio::net::TcpListener;
 use tokio::time::{sleep, Duration};
 use tower::ServiceBuilder;
