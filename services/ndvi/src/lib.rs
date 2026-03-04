@@ -4,8 +4,11 @@ use axum::{middleware, Router};
 use dotenvy::dotenv;
 use ndvi_common::auth::{ApiKeyConfig, AuthState, MySqlApiKeyValidator};
 use ndvi_common::throttle::ThrottleLayer;
-use sqlx::mysql::MySqlPoolOptions;
+use sqlx::mysql::MySqlPool;
+use sqlx::mysql::{MySqlPool, MySqlPoolOptions};
+use sqlx::PgPool;
 use tokio::net::TcpListener;
+use tokio::time::{sleep, Duration};
 use tower::ServiceBuilder;
 use tracing_subscriber::{fmt, EnvFilter};
 
@@ -20,9 +23,7 @@ pub async fn run() {
     fmt().with_env_filter(EnvFilter::from_default_env()).init();
 
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    let pool = db::create_pool(&database_url)
-        .await
-        .expect("failed to connect to database");
+    let pool = connect_with_retry(&database_url).await;
 
     let auth_disabled = env::var("AUTH_DISABLED")
         .map(|value| value == "1" || value.to_lowercase() == "true")
@@ -32,11 +33,7 @@ pub async fn run() {
     } else {
         match env::var("MYSQL_DATABASE_URL") {
             Ok(mysql_url) => {
-                let mysql_pool = MySqlPoolOptions::new()
-                    .max_connections(5)
-                    .connect(&mysql_url)
-                    .await
-                    .expect("failed to connect to mysql for api key validation");
+                let mysql_pool = connect_mysql_with_retry(&mysql_url).await;
                 let config = ApiKeyConfig::from_env().expect("DJANGO_API_KEY_PEPPER must be set");
                 Some(Arc::new(MySqlApiKeyValidator {
                     pool: mysql_pool,
@@ -67,4 +64,53 @@ pub async fn run() {
         .await
         .expect("failed to bind address");
     axum::serve(listener, app).await.expect("server failed");
+}
+
+async fn connect_with_retry(database_url: &str) -> PgPool {
+    const ATTEMPTS: usize = 10;
+    const BASE_DELAY_MS: u64 = 500;
+    for attempt in 1..=ATTEMPTS {
+        match db::create_pool(database_url).await {
+            Ok(pool) => return pool,
+            Err(err) if attempt < ATTEMPTS => {
+                tracing::warn!(
+                    attempt,
+                    error = %err,
+                    "ndvi postgres not ready, retrying after delay"
+                );
+                sleep(Duration::from_millis(BASE_DELAY_MS * attempt as u64)).await;
+            }
+            Err(err) => panic!(
+                "failed to connect to database after {} attempts: {err}",
+                ATTEMPTS
+            ),
+        }
+    }
+    unreachable!()
+}
+
+async fn connect_mysql_with_retry(mysql_url: &str) -> MySqlPool {
+    const ATTEMPTS: usize = 10;
+    const BASE_DELAY_MS: u64 = 500;
+    for attempt in 1..=ATTEMPTS {
+        match MySqlPoolOptions::new()
+            .max_connections(5)
+            .connect(mysql_url)
+            .await
+        {
+            Ok(pool) => return pool,
+            Err(err) if attempt < ATTEMPTS => {
+                tracing::warn!(
+                    attempt,
+                    error = %err,
+                    "mysql api key db not ready, retrying after delay"
+                );
+                sleep(Duration::from_millis(BASE_DELAY_MS * attempt as u64)).await;
+            }
+            Err(err) => panic!(
+                "failed to connect to mysql for api key validation after {ATTEMPTS} attempts: {err}"
+            ),
+        }
+    }
+    unreachable!()
 }
