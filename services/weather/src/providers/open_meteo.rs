@@ -5,7 +5,7 @@ use chrono_tz::Tz;
 use serde_json::{Map, Value};
 
 use crate::providers::ProviderError;
-use crate::types::{CurrentWeather, DailyForecast, Location, ProviderName};
+use crate::types::{CurrentWeather, DailyForecast, HourlyForecast, Location, ProviderName};
 
 #[derive(Clone)]
 pub struct OpenMeteoProvider {
@@ -123,6 +123,52 @@ impl OpenMeteoProvider {
                 t_max_c: t_max,
                 precipitation_mm: precip,
                 wind_speed_max_mps: list_value(wind_max_list, idx),
+                source: ProviderName::OpenMeteo,
+            });
+        }
+        Ok(forecasts)
+    }
+
+    pub async fn hourly(
+        &self,
+        loc: &Location,
+        hours: u32,
+    ) -> Result<Vec<HourlyForecast>, ProviderError> {
+        let params = [
+            ("latitude", loc.lat.to_string()),
+            ("longitude", loc.lon.to_string()),
+            (
+                "hourly",
+                "temperature_2m,precipitation,wind_speed_10m,cloudcover".to_string(),
+            ),
+            ("forecast_hours", hours.to_string()),
+            ("timezone", loc.tz_name.clone()),
+        ];
+
+        let payload = self.request(&params).await?;
+        let hourly_block = payload.get("hourly").and_then(|v| v.as_object());
+        let times = hourly_block.and_then(|obj| obj.get("time"));
+        let temp_list = hourly_block.and_then(|obj| obj.get("temperature_2m"));
+        let precip_list = hourly_block.and_then(|obj| obj.get("precipitation"));
+        let wind_list = hourly_block.and_then(|obj| obj.get("wind_speed_10m"));
+        let cloud_list = hourly_block.and_then(|obj| obj.get("cloudcover"));
+
+        let mut forecasts = Vec::new();
+        let time_values = times
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        for (idx, raw_time) in time_values.iter().enumerate() {
+            let timestamp = raw_time
+                .as_str()
+                .and_then(|raw| parse_datetime(raw, loc.tz));
+            let Some(timestamp) = timestamp else { continue };
+            forecasts.push(HourlyForecast {
+                timestamp,
+                temperature_c: list_value(temp_list, idx),
+                precipitation_mm: list_value(precip_list, idx),
+                wind_speed_mps: list_value(wind_list, idx),
+                cloud_cover_pct: list_value(cloud_list, idx),
                 source: ProviderName::OpenMeteo,
             });
         }

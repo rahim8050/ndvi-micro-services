@@ -16,7 +16,7 @@ use crate::config::WeatherConfig;
 use crate::metrics;
 use crate::services;
 use crate::state::AppState;
-use crate::types::{DailyForecast, ProviderName, WeeklyReport};
+use crate::types::{DailyForecast, HourlyForecast, ProviderName, WeeklyReport};
 
 pub fn router(state: AppState) -> Router {
     Router::new()
@@ -25,6 +25,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/weather/current/", get(weather_current))
         .route("/api/v1/weather/daily/", get(weather_daily))
         .route("/api/v1/weather/weekly/", get(weather_weekly))
+        .route("/api/v1/weather/hourly/", get(weather_hourly))
         .route_layer(middleware::from_fn(metrics::metrics_middleware))
         .with_state(state)
 }
@@ -190,6 +191,51 @@ async fn weather_weekly(
     (StatusCode::OK, Json(envelope)).into_response()
 }
 
+async fn weather_hourly(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Response {
+    let params = match parse_hourly_params(&params, &state.config) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+
+    let cache_key = format!("weather:hourly:{}", params.cache_key_segment());
+    let forecasts = match state.cache.get_hourly(&cache_key) {
+        Some(value) => value,
+        None => {
+            let location = params.base.location();
+            match services::get_hourly(
+                &state.providers,
+                params.base.provider,
+                &location,
+                params.hours,
+            )
+            .await
+            {
+                Ok(value) => {
+                    state.cache.set_hourly(
+                        cache_key,
+                        value.clone(),
+                        state.config.cache_ttl_hourly_s,
+                    );
+                    value
+                }
+                Err(err) => return provider_error(err),
+            }
+        }
+    };
+
+    let payload = HourlyForecastData {
+        hours: forecasts
+            .iter()
+            .map(|forecast| HourlyForecastResponse::from(forecast))
+            .collect(),
+    };
+    let envelope = Envelope::success("OK", payload);
+    (StatusCode::OK, Json(envelope)).into_response()
+}
+
 #[derive(Serialize)]
 struct ErrorEnvelope {
     status: i32,
@@ -256,6 +302,17 @@ impl ValidatedRangeParams {
             self.start,
             self.end
         )
+    }
+}
+
+struct ValidatedHourlyParams {
+    base: ValidatedBaseParams,
+    hours: u32,
+}
+
+impl ValidatedHourlyParams {
+    fn cache_key_segment(&self) -> String {
+        format!("{}:{}", self.base.cache_key_segment(), self.hours)
     }
 }
 
@@ -349,6 +406,57 @@ fn parse_range_params(
         start: start.unwrap_or_else(|| NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()),
         end: end.unwrap_or_else(|| NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()),
     })
+}
+
+fn parse_hourly_params(
+    params: &HashMap<String, String>,
+    config: &WeatherConfig,
+) -> Result<ValidatedHourlyParams, Response> {
+    let base = match parse_base_params(params, config) {
+        Ok(value) => value,
+        Err(response) => return Err(response),
+    };
+
+    let mut errors: Map<String, Value> = Map::new();
+    let hours = parse_hours_param(params, &mut errors);
+
+    if !errors.is_empty() {
+        let errors = Value::Object(errors);
+        return Err(error_response(
+            StatusCode::BAD_REQUEST,
+            "Request failed",
+            errors,
+        ));
+    }
+
+    Ok(ValidatedHourlyParams {
+        base,
+        hours: hours.unwrap_or(48),
+    })
+}
+
+fn parse_hours_param(
+    params: &HashMap<String, String>,
+    errors: &mut Map<String, Value>,
+) -> Option<u32> {
+    let raw = match params.get("hours") {
+        Some(value) => value,
+        None => return Some(48),
+    };
+
+    let value = match raw.parse::<u32>() {
+        Ok(value) => value,
+        Err(_) => {
+            push_error(errors, "hours", "A valid integer is required.");
+            return None;
+        }
+    };
+
+    if value < 1 || value > 168 {
+        push_error(errors, "hours", "Ensure this value is between 1 and 168.");
+        return None;
+    }
+    Some(value)
 }
 
 fn parse_required_float(
@@ -526,6 +634,34 @@ impl WeeklyReportResponse {
 #[derive(Serialize)]
 struct WeatherWeeklyData {
     reports: Vec<WeeklyReportResponse>,
+}
+
+#[derive(Serialize)]
+struct HourlyForecastResponse {
+    timestamp: DateTime<FixedOffset>,
+    temperature_c: Option<f64>,
+    precipitation_mm: Option<f64>,
+    wind_speed_mps: Option<f64>,
+    cloud_cover_pct: Option<f64>,
+    source: String,
+}
+
+impl From<&HourlyForecast> for HourlyForecastResponse {
+    fn from(value: &HourlyForecast) -> Self {
+        Self {
+            timestamp: value.timestamp,
+            temperature_c: value.temperature_c,
+            precipitation_mm: value.precipitation_mm,
+            wind_speed_mps: value.wind_speed_mps,
+            cloud_cover_pct: value.cloud_cover_pct,
+            source: value.source.as_str().to_string(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct HourlyForecastData {
+    hours: Vec<HourlyForecastResponse>,
 }
 
 #[cfg(test)]

@@ -121,6 +121,15 @@ impl NasaPowerProvider {
         Ok(forecasts)
     }
 
+    pub async fn hourly(
+        &self,
+        _loc: &Location,
+        _hours: u32,
+    ) -> Result<Vec<crate::types::HourlyForecast>, ProviderError> {
+        // NASA POWER does not provide hourly data; return empty forecast
+        Ok(Vec::new())
+    }
+
     async fn request(
         &self,
         params: &[(&str, String)],

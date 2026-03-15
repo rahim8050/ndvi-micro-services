@@ -1,4 +1,4 @@
-use crate::types::{CurrentWeather, DailyForecast, Location, ProviderName};
+use crate::types::{CurrentWeather, DailyForecast, HourlyForecast, Location, ProviderName};
 
 mod nasa_power;
 mod open_meteo;
@@ -47,6 +47,18 @@ impl Providers {
         match provider {
             ProviderName::OpenMeteo => self.open_meteo.daily(location, start, end).await,
             ProviderName::NasaPower => self.nasa_power.daily(location, start, end).await,
+        }
+    }
+
+    pub async fn hourly(
+        &self,
+        provider: ProviderName,
+        location: &Location,
+        hours: u32,
+    ) -> Result<Vec<HourlyForecast>, ProviderError> {
+        match provider {
+            ProviderName::OpenMeteo => self.open_meteo.hourly(location, hours).await,
+            ProviderName::NasaPower => self.nasa_power.hourly(location, hours).await,
         }
     }
 }

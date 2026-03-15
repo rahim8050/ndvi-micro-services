@@ -10,6 +10,7 @@ pub struct WeatherConfig {
     pub cache_ttl_current_s: u64,
     pub cache_ttl_daily_s: u64,
     pub cache_ttl_weekly_s: u64,
+    pub cache_ttl_hourly_s: u64,
 }
 
 impl WeatherConfig {
@@ -47,6 +48,10 @@ impl WeatherConfig {
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(1800);
+        let cache_ttl_hourly_s = std::env::var("WEATHER_CACHE_TTL_HOURLY_S")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(600);
 
         Ok(Self {
             default_tz,
@@ -57,6 +62,7 @@ impl WeatherConfig {
             cache_ttl_current_s,
             cache_ttl_daily_s,
             cache_ttl_weekly_s,
+            cache_ttl_hourly_s,
         })
     }
 

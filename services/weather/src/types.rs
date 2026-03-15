@@ -64,3 +64,13 @@ pub struct WeeklyReport {
     pub days: Vec<DailyForecast>,
     pub source: ProviderName,
 }
+
+#[derive(Debug, Clone)]
+pub struct HourlyForecast {
+    pub timestamp: DateTime<FixedOffset>,
+    pub temperature_c: Option<f64>,
+    pub precipitation_mm: Option<f64>,
+    pub wind_speed_mps: Option<f64>,
+    pub cloud_cover_pct: Option<f64>,
+    pub source: ProviderName,
+}

@@ -2,7 +2,7 @@ use chrono::{Datelike, Duration, NaiveDate};
 
 use crate::config::WeatherConfig;
 use crate::providers::{ProviderError, Providers};
-use crate::types::{DailyForecast, Location, ProviderName, WeeklyReport};
+use crate::types::{DailyForecast, HourlyForecast, Location, ProviderName, WeeklyReport};
 
 pub async fn get_current(
     providers: &Providers,
@@ -20,6 +20,15 @@ pub async fn get_daily(
     end: NaiveDate,
 ) -> Result<Vec<DailyForecast>, ProviderError> {
     providers.daily(provider, location, start, end).await
+}
+
+pub async fn get_hourly(
+    providers: &Providers,
+    provider: ProviderName,
+    location: &Location,
+    hours: u32,
+) -> Result<Vec<HourlyForecast>, ProviderError> {
+    providers.hourly(provider, location, hours).await
 }
 
 pub fn aggregate_weekly(forecasts: &[DailyForecast], provider: ProviderName) -> Vec<WeeklyReport> {

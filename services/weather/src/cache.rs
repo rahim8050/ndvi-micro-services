@@ -2,13 +2,14 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::types::{CurrentWeather, DailyForecast, WeeklyReport};
+use crate::types::{CurrentWeather, DailyForecast, HourlyForecast, WeeklyReport};
 
 #[derive(Clone)]
 pub struct WeatherResponseCache {
     current: Arc<Mutex<HashMap<String, TimedEntry<CurrentWeather>>>>,
     daily: Arc<Mutex<HashMap<String, TimedEntry<Vec<DailyForecast>>>>>,
     weekly: Arc<Mutex<HashMap<String, TimedEntry<Vec<WeeklyReport>>>>>,
+    hourly: Arc<Mutex<HashMap<String, TimedEntry<Vec<HourlyForecast>>>>>,
 }
 
 #[derive(Clone)]
@@ -23,6 +24,7 @@ impl WeatherResponseCache {
             current: Arc::new(Mutex::new(HashMap::new())),
             daily: Arc::new(Mutex::new(HashMap::new())),
             weekly: Arc::new(Mutex::new(HashMap::new())),
+            hourly: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -48,6 +50,14 @@ impl WeatherResponseCache {
 
     pub fn set_weekly(&self, key: String, value: Vec<WeeklyReport>, ttl_secs: u64) {
         set_cached(&self.weekly, key, value, ttl_secs);
+    }
+
+    pub fn get_hourly(&self, key: &str) -> Option<Vec<HourlyForecast>> {
+        get_cached(&self.hourly, key)
+    }
+
+    pub fn set_hourly(&self, key: String, value: Vec<HourlyForecast>, ttl_secs: u64) {
+        set_cached(&self.hourly, key, value, ttl_secs);
     }
 }
 
