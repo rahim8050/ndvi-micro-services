@@ -680,6 +680,7 @@ mod tests {
             cache_ttl_current_s: 120,
             cache_ttl_daily_s: 900,
             cache_ttl_weekly_s: 1800,
+            cache_ttl_hourly_s: 600,
         };
         let forecast = DailyForecast {
             day: NaiveDate::from_ymd_opt(2026, 2, 28).expect("valid date"),
@@ -710,6 +711,7 @@ mod tests {
             cache_ttl_current_s: 120,
             cache_ttl_daily_s: 900,
             cache_ttl_weekly_s: 1800,
+            cache_ttl_hourly_s: 600,
         };
         let forecast = DailyForecast {
             day: NaiveDate::from_ymd_opt(2026, 2, 28).expect("valid date"),
