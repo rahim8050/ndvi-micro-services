@@ -21,7 +21,7 @@ services:
       RUST_LOG: info
       AUTH_DISABLED: "true"
     ports:
-      - "8081:8081"
+      - "${NDVI_PORT:-8082}:8081"
     depends_on:
       - db
 
