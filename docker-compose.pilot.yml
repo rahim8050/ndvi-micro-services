@@ -43,7 +43,7 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@ndvi-db:5432/${POSTGRES_DB}
       PORT: ${NDVI_PORT}
     ports:
-      - "${NDVI_PORT}:8081"
+      - "${NDVI_PORT}:${NDVI_PORT}"
     depends_on:
       ndvi-db:
         condition: service_healthy
