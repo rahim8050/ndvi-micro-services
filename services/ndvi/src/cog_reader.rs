@@ -1,23 +1,16 @@
-use reqwest::Client;
 use std::time::Duration;
 
-pub struct CogReader {
-    client: Client,
-}
+#[derive(Default)]
+pub struct CogReader {}
 
 impl CogReader {
     pub fn new() -> Self {
-        Self {
-            client: Client::builder()
-                .timeout(Duration::from_secs(30))
-                .build()
-                .expect("Failed to create HTTP client"),
-        }
+        Self::default()
     }
 
     pub async fn read_tile(
         &self,
-        href: &str,
+        _href: &str,
         _tile_x: u32,
         _tile_y: u32,
     ) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
