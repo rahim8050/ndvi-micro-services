@@ -17,6 +17,8 @@ pub mod db;
 pub mod metrics;
 pub mod models;
 pub mod routes;
+pub mod cog_reader;
+pub mod pipeline;
 
 pub async fn run() {
     dotenv().ok();

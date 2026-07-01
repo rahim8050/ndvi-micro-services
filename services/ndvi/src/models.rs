@@ -71,3 +71,41 @@ mod tests {
         assert!(input.validate().is_err());
     }
 }
+
+#[derive(Debug, Deserialize)]
+pub struct PreprocessRequest {
+    pub bbox: Bbox,
+    pub vv_href: String,
+    pub vh_href: String,
+    pub orbit: String,
+    pub index_type: String,
+    pub crop_type: Option<String>,
+    pub soil_type: Option<String>,
+    pub coefficients: Option<CalibrationCoefficients>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Bbox {
+    pub south: f64,
+    pub west: f64,
+    pub north: f64,
+    pub east: f64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CalibrationCoefficients {
+    pub alpha: f32,
+    pub beta: f32,
+    pub gamma: f32,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct PreprocessResponse {
+    pub mean: Option<f64>,
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+    pub sample_count: u64,
+    pub valid_pixel_fraction: f64,
+    pub quality_flags: Vec<String>,
+    pub processing_ms: f64,
+}
