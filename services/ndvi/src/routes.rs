@@ -6,6 +6,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use tower::limit::ConcurrencyLimitLayer;
 use ndvi_common::Envelope;
 use serde_json::json;
 
@@ -20,7 +21,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1", get(api_v1_root))
         .route("/api/v1/", get(api_v1_root))
         .route("/api/v1/ndvi", post(create_ndvi).get(ndvi_info))
-        .route("/api/v1/preprocess", post(preprocess))
+        .route(
+            "/api/v1/preprocess",
+            post(preprocess).route_layer(ConcurrencyLimitLayer::new(2)),
+        )
         .route_layer(middleware::from_fn(metrics::metrics_middleware))
         .with_state(state)
 }
