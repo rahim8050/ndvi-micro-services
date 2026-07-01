@@ -13,12 +13,12 @@ use tokio::time::{sleep, Duration};
 use tower::ServiceBuilder;
 use tracing_subscriber::{fmt, EnvFilter};
 
+pub mod cog_reader;
 pub mod db;
 pub mod metrics;
 pub mod models;
-pub mod routes;
-pub mod cog_reader;
 pub mod pipeline;
+pub mod routes;
 
 pub async fn run() {
     dotenv().ok();

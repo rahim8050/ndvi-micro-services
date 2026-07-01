@@ -6,11 +6,17 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use tower::limit::ConcurrencyLimitLayer;
 use ndvi_common::Envelope;
 use serde_json::json;
+use tower::limit::ConcurrencyLimitLayer;
 
-use crate::{db::AppState, metrics, models::{NdviInput, PreprocessRequest}, cog_reader::CogReader, pipeline::run_pipeline};
+use crate::{
+    cog_reader::CogReader,
+    db::AppState,
+    metrics,
+    models::{NdviInput, PreprocessRequest},
+    pipeline::run_pipeline,
+};
 use ndarray::Array2;
 
 pub fn router(state: AppState) -> Router {
@@ -116,19 +122,29 @@ async fn create_ndvi(State(state): State<AppState>, Json(payload): Json<NdviInpu
 
 async fn preprocess(Json(payload): Json<PreprocessRequest>) -> Response {
     let reader = CogReader::new();
-    
+
     // In a real app we'd convert lat/lon bbox to tile x/y
     // For now we mock the read
-    let vv_data = reader.read_tile(&payload.vv_href, 0, 0).await.unwrap_or_else(|_| vec![0.1; 10000]);
-    let vh_data = reader.read_tile(&payload.vh_href, 0, 0).await.unwrap_or_else(|_| vec![0.1; 10000]);
-    
+    let vv_data = reader
+        .read_tile(&payload.vv_href, 0, 0)
+        .await
+        .unwrap_or_else(|_| vec![0.1; 10000]);
+    let vh_data = reader
+        .read_tile(&payload.vh_href, 0, 0)
+        .await
+        .unwrap_or_else(|_| vec![0.1; 10000]);
+
     let vv_raw = Array2::from_shape_vec((100, 100), vv_data).unwrap();
     let vh_raw = Array2::from_shape_vec((100, 100), vh_data).unwrap();
-    
+
     // Parse orbit to inc_angle (mock for now, assume 40.0)
     let inc_angle_deg = 40.0;
-    
+
     let result = run_pipeline(vv_raw, vh_raw, inc_angle_deg, &payload.index_type);
-    
-    (StatusCode::OK, Json(Envelope::success("OK", serde_json::json!(result)))).into_response()
+
+    (
+        StatusCode::OK,
+        Json(Envelope::success("OK", serde_json::json!(result))),
+    )
+        .into_response()
 }

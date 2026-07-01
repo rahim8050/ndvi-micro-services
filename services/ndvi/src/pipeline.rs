@@ -1,6 +1,6 @@
+use crate::models::PreprocessResponse;
 use ndarray::{azip, Array2};
 use rayon::prelude::*;
-use crate::models::PreprocessResponse;
 
 pub fn run_pipeline(
     vv_raw: Array2<f32>,
@@ -10,7 +10,7 @@ pub fn run_pipeline(
 ) -> PreprocessResponse {
     let (vv, mask_vv) = mask_nodata(&vv_raw);
     let (vh, mask_vh) = mask_nodata(&vh_raw);
-    
+
     // Pixel-wise AND of masks
     let mut valid_mask = mask_vv.clone();
     azip!((v in &mut valid_mask, &vh in &mask_vh) *v = *v && vh);
@@ -73,11 +73,11 @@ pub fn refined_lee_filter(arr: &Array2<f32>, kernel_size: u32) -> Array2<f32> {
                 if arr[[i, j]].is_nan() {
                     continue;
                 }
-                
+
                 let mut sum = 0.0;
                 let mut sum_sq = 0.0;
                 let mut count = 0.0;
-                
+
                 for ki in (i - half)..=(i + half) {
                     for kj in (j - half)..=(j + half) {
                         let val = arr[[ki, kj]];
@@ -88,16 +88,20 @@ pub fn refined_lee_filter(arr: &Array2<f32>, kernel_size: u32) -> Array2<f32> {
                         }
                     }
                 }
-                
+
                 if count > 0.0 {
                     let mean = sum / count;
                     let variance = (sum_sq / count) - (mean * mean);
-                    
+
                     // Lee filter weight: w = var / (mean^2 * sigma_v^2 + var)
                     let sigma_v = 0.26; // Approx for Sentinel-1 GRD 3-look
                     let var_v = mean * mean * sigma_v * sigma_v;
-                    let w = if variance > var_v { (variance - var_v) / variance } else { 0.0 };
-                    
+                    let w = if variance > var_v {
+                        (variance - var_v) / variance
+                    } else {
+                        0.0
+                    };
+
                     row_slice[j] = mean + w * (arr[[i, j]] - mean);
                 }
             }
@@ -106,7 +110,12 @@ pub fn refined_lee_filter(arr: &Array2<f32>, kernel_size: u32) -> Array2<f32> {
     output
 }
 
-fn compute_index(vv_lin: &Array2<f32>, vh_lin: &Array2<f32>, inc_angle_deg: f32, index_type: &str) -> Array2<f32> {
+fn compute_index(
+    vv_lin: &Array2<f32>,
+    vh_lin: &Array2<f32>,
+    inc_angle_deg: f32,
+    index_type: &str,
+) -> Array2<f32> {
     if index_type == "RVI" {
         // RVI is calculated on linear scale
         let mut out = vv_lin.clone();
@@ -116,15 +125,15 @@ fn compute_index(vv_lin: &Array2<f32>, vh_lin: &Array2<f32>, inc_angle_deg: f32,
         // S1_SMI is calculated on dB scale, normalized by incidence angle
         let vv_db = linear_to_db(vv_lin);
         let vh_db = linear_to_db(vh_lin);
-        
+
         let vv_db_norm = normalize_incidence_angle(&vv_db, inc_angle_deg);
         let vh_db_norm = normalize_incidence_angle(&vh_db, inc_angle_deg);
-        
+
         let mut out = vv_db_norm.clone();
         let alpha = 0.70;
         let beta = -0.30;
         let gamma = 0.50;
-        
+
         azip!((out in &mut out, &vv in &vv_db_norm, &vh in &vh_db_norm) *out = alpha * vv + beta * vh + gamma);
         out
     } else {
@@ -151,7 +160,11 @@ fn compute_stats(index: &Array2<f32>, mask: &Array2<bool>) -> PreprocessResponse
     let fraction = (count as f64) / total;
 
     PreprocessResponse {
-        mean: if count > 0 { Some((sum / (count as f32)) as f64) } else { None },
+        mean: if count > 0 {
+            Some((sum / (count as f32)) as f64)
+        } else {
+            None
+        },
         min: if count > 0 { Some(min as f64) } else { None },
         max: if count > 0 { Some(max as f64) } else { None },
         sample_count: count,
@@ -160,4 +173,3 @@ fn compute_stats(index: &Array2<f32>, mask: &Array2<bool>) -> PreprocessResponse
         processing_ms: 0.0,
     }
 }
-
