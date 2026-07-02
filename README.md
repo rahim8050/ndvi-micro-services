@@ -37,9 +37,10 @@ All endpoints return a consistent envelope:
 }
 ```
 
-### NDVI
+### NDVI and SAR
 
 - `POST /api/v1/ndvi` – ingest NDVI sample (201 Created)
+- `POST /api/v1/preprocess` – calculate RVI and S1_SMI from Sentinel-1 SAR COGs using Rayon parallelized Refined Lee filters
 - `GET /api/v1/` – API discovery
 - `GET /healthz` – liveness
 - `GET /metrics` – Prometheus metrics
