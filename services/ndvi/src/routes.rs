@@ -170,20 +170,14 @@ async fn compute(Json(payload): Json<ComputeRequest>) -> Response {
     let vv_raw = match Array2::from_shape_vec((payload.height, payload.width), payload.vv) {
         Ok(arr) => arr,
         Err(err) => {
-            let body = Envelope::failure(
-                "Shape error",
-                Some(json!({"detail": err.to_string()})),
-            );
+            let body = Envelope::failure("Shape error", Some(json!({"detail": err.to_string()})));
             return (StatusCode::BAD_REQUEST, Json(body)).into_response();
         }
     };
     let vh_raw = match Array2::from_shape_vec((payload.height, payload.width), payload.vh) {
         Ok(arr) => arr,
         Err(err) => {
-            let body = Envelope::failure(
-                "Shape error",
-                Some(json!({"detail": err.to_string()})),
-            );
+            let body = Envelope::failure("Shape error", Some(json!({"detail": err.to_string()})));
             return (StatusCode::BAD_REQUEST, Json(body)).into_response();
         }
     };
