@@ -40,10 +40,26 @@ All endpoints return a consistent envelope:
 ### NDVI and SAR
 
 - `POST /api/v1/ndvi` – ingest NDVI sample (201 Created)
-- `POST /api/v1/preprocess` – calculate RVI and S1_SMI from Sentinel-1 SAR COGs using Rayon parallelized Refined Lee filters
+- `POST /api/v1/preprocess` – calculate RVI and S1_SMI from Sentinel-1 SAR COGs (fetches COG URLs internally; currently returns dummy data until COG reader is implemented)
+- `POST /api/v1/compute` – calculate RVI or S1_SMI from raw VV/VH pixel arrays (used by Django `RustSarEngine` as the primary integration path)
 - `GET /api/v1/` – API discovery
 - `GET /healthz` – liveness
 - `GET /metrics` – Prometheus metrics
+
+**`POST /api/v1/compute` request:**
+
+```json
+{
+  "vv": [0.1, 0.2, ...],
+  "vh": [0.01, 0.02, ...],
+  "width": 100,
+  "height": 100,
+  "inc_angle_deg": 40.0,
+  "index_type": "RVI"
+}
+```
+
+Response contains mean/min/max/sample_count/valid_pixel_fraction after applying Refined Lee speckle filter, dB conversion (S1_SMI only), and index formula.
 
 ### Weather
 
