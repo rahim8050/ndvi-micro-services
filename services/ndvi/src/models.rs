@@ -109,3 +109,13 @@ pub struct PreprocessResponse {
     pub quality_flags: Vec<String>,
     pub processing_ms: f64,
 }
+
+#[derive(Debug, Deserialize)]
+pub struct ComputeRequest {
+    pub vv: Vec<f32>,
+    pub vh: Vec<f32>,
+    pub width: usize,
+    pub height: usize,
+    pub inc_angle_deg: Option<f32>,
+    pub index_type: String,
+}

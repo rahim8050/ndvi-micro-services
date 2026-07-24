@@ -14,7 +14,7 @@ use crate::{
     cog_reader::CogReader,
     db::AppState,
     metrics,
-    models::{NdviInput, PreprocessRequest},
+    models::{ComputeRequest, NdviInput, PreprocessRequest},
     pipeline::run_pipeline,
 };
 use ndarray::Array2;
@@ -31,6 +31,7 @@ pub fn router(state: AppState) -> Router {
             "/api/v1/preprocess",
             post(preprocess).route_layer(ConcurrencyLimitLayer::new(2)),
         )
+        .route("/api/v1/compute", post(compute))
         .route_layer(middleware::from_fn(metrics::metrics_middleware))
         .with_state(state)
 }
@@ -140,6 +141,54 @@ async fn preprocess(Json(payload): Json<PreprocessRequest>) -> Response {
     // Parse orbit to inc_angle (mock for now, assume 40.0)
     let inc_angle_deg = 40.0;
 
+    let result = run_pipeline(vv_raw, vh_raw, inc_angle_deg, &payload.index_type);
+
+    (
+        StatusCode::OK,
+        Json(Envelope::success("OK", serde_json::json!(result))),
+    )
+        .into_response()
+}
+
+async fn compute(Json(payload): Json<ComputeRequest>) -> Response {
+    let expected_len = payload.width * payload.height;
+    if payload.vv.len() != expected_len || payload.vh.len() != expected_len {
+        let body = Envelope::failure(
+            "Invalid input dimensions",
+            Some(json!({
+                "detail": format!(
+                    "expected {} elements per band, got vv={} vh={}",
+                    expected_len,
+                    payload.vv.len(),
+                    payload.vh.len()
+                )
+            })),
+        );
+        return (StatusCode::BAD_REQUEST, Json(body)).into_response();
+    }
+
+    let vv_raw = match Array2::from_shape_vec((payload.height, payload.width), payload.vv) {
+        Ok(arr) => arr,
+        Err(err) => {
+            let body = Envelope::failure(
+                "Shape error",
+                Some(json!({"detail": err.to_string()})),
+            );
+            return (StatusCode::BAD_REQUEST, Json(body)).into_response();
+        }
+    };
+    let vh_raw = match Array2::from_shape_vec((payload.height, payload.width), payload.vh) {
+        Ok(arr) => arr,
+        Err(err) => {
+            let body = Envelope::failure(
+                "Shape error",
+                Some(json!({"detail": err.to_string()})),
+            );
+            return (StatusCode::BAD_REQUEST, Json(body)).into_response();
+        }
+    };
+
+    let inc_angle_deg = payload.inc_angle_deg.unwrap_or(40.0);
     let result = run_pipeline(vv_raw, vh_raw, inc_angle_deg, &payload.index_type);
 
     (
