@@ -8,3 +8,5 @@ target
 *.log
 *.tmp
 .DS_Store
+warp-terminal.deb
+warp-terminal.tar.gz

@@ -55,7 +55,7 @@ services:
     env_file: .env
     environment:
       MYSQL_DATABASE_URL: mysql://${MYSQL_USER}:${MYSQL_PASSWORD}@weather-db:3306/${MYSQL_DATABASE}
-      PORT: ${WEATHER_PORT}
+      PORT: 8090
     ports:
       - "${WEATHER_PORT}:8090"
     depends_on:
