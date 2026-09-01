@@ -114,6 +114,10 @@ pub struct PreprocessResponse {
 pub struct ComputeRequest {
     pub vv: Vec<f32>,
     pub vh: Vec<f32>,
+    #[serde(default)]
+    pub hh: Option<Vec<f32>>,
+    #[serde(default)]
+    pub hv: Option<Vec<f32>>,
     pub width: usize,
     pub height: usize,
     pub inc_angle_deg: Option<f32>,

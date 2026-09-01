@@ -19,8 +19,44 @@ pub fn run_pipeline(
     let vv_filtered = refined_lee_filter(&vv, 3);
     let vh_filtered = refined_lee_filter(&vh, 3);
 
+    // Estimate incidence angle from data when the STAC asset is unavailable
+    // (40.0 is the Python-side fallback constant; real angles are scene-specific)
+    let angle = if (inc_angle_deg - 40.0).abs() < 0.01 {
+        estimate_incidence_angle_deg(&vv_filtered, &vh_filtered)
+    } else {
+        inc_angle_deg
+    };
+
     // Compute index (handles dB conversion internally if needed)
-    let index = compute_index(&vv_filtered, &vh_filtered, inc_angle_deg, index_type);
+    let index = compute_index(&vv_filtered, &vh_filtered, angle, index_type);
+
+    compute_stats(&index, &valid_mask)
+}
+
+/// Pipeline for L-band SAR indices (L_RVI) using HH/HV bands.
+/// Same structure as `run_pipeline` but accepts HH/HV as primary bands.
+pub fn run_pipeline_sar(
+    hh_raw: Array2<f32>,
+    hv_raw: Array2<f32>,
+    inc_angle_deg: f32,
+    index_type: &str,
+) -> PreprocessResponse {
+    let (hh, mask_hh) = mask_nodata(&hh_raw);
+    let (hv, mask_hv) = mask_nodata(&hv_raw);
+
+    let mut valid_mask = mask_hh.clone();
+    azip!((v in &mut valid_mask, &hv in &mask_hv) *v = *v && hv);
+
+    let hh_filtered = refined_lee_filter(&hh, 3);
+    let hv_filtered = refined_lee_filter(&hv, 3);
+
+    let angle = if (inc_angle_deg - 40.0).abs() < 0.01 {
+        estimate_incidence_angle_deg(&hh_filtered, &hv_filtered)
+    } else {
+        inc_angle_deg
+    };
+
+    let index = compute_index_sar(&hh_filtered, &hv_filtered, angle, index_type);
 
     compute_stats(&index, &valid_mask)
 }
@@ -41,6 +77,54 @@ fn linear_to_db(arr: &Array2<f32>) -> Array2<f32> {
     })
 }
 
+/// Estimate the scene-average local incidence angle (degrees) from VV/VH backscatter.
+///
+/// When the Planetary Computer STAC item has no `local_incidence_angle` asset,
+/// derive a reasonable estimate from the VV/VH power ratio in dB.
+///
+/// Empirical relationship for Sentinel-1 IW GRD over agricultural land:
+///   VV/VH(dB) ≈ 1.5 + 0.075 * (θ - 35)
+///   => θ ≈ 35 + (VV/VH_dB - 1.5) / 0.075
+///
+/// Clamps result to [29.0, 46.0] (Sentinel-1 IW GRD incidence angle range).
+pub fn estimate_incidence_angle_deg(vv: &Array2<f32>, vh: &Array2<f32>) -> f32 {
+    let mut vv_db_sum = 0.0_f32;
+    let mut vh_db_sum = 0.0_f32;
+    let mut count = 0_u64;
+
+    azip!((&v in vv, &h in vh) {
+        if v > 1e-10 && h > 1e-10 {
+            vv_db_sum += 10.0 * v.log10();
+            vh_db_sum += 10.0 * h.log10();
+            count += 1;
+        }
+    });
+
+    if count < 100 {
+        return 40.0;
+    }
+
+    let vv_vh_db = (vv_db_sum / count as f32) - (vh_db_sum / count as f32);
+    let theta = 35.0 + (vv_vh_db - 1.5) / 0.075;
+    theta.clamp(29.0, 46.0)
+}
+
+/// Normalize linear backscatter for incidence angle.
+///
+/// `σ_norm = σ * cos(θ_local) / cos(θ_ref)` — removes the geometric
+/// dependence on look angle so that backscatter values from different
+/// parts of the swath (or different orbits) are comparable.
+fn normalize_incidence_angle_linear(arr: &Array2<f32>, theta_local_deg: f32) -> Array2<f32> {
+    let theta_ref_rad = 40.0_f32.to_radians();
+    let theta_local_rad = theta_local_deg.to_radians();
+    let correction = theta_local_rad.cos() / theta_ref_rad.cos();
+    arr.mapv(|v| if v.is_nan() { f32::NAN } else { v * correction })
+}
+
+/// Normalize dB backscatter for incidence angle.
+///
+/// `σ_dB_norm = σ_dB + 10*log10(cos(θ_ref)/cos(θ_local))` — the dB
+/// equivalent of `normalize_incidence_angle_linear`.
 fn normalize_incidence_angle(db_arr: &Array2<f32>, theta_local_deg: f32) -> Array2<f32> {
     let theta_ref_rad = 40.0_f32.to_radians();
     let theta_local_rad = theta_local_deg.to_radians();
@@ -117,9 +201,13 @@ fn compute_index(
     index_type: &str,
 ) -> Array2<f32> {
     if index_type == "RVI" {
-        // RVI is calculated on linear scale
-        let mut out = vv_lin.clone();
-        azip!((out in &mut out, &vv in vv_lin, &vh in vh_lin) *out = (4.0 * vh) / (vv + vh));
+        // RVI on incidence-angle-normalized linear backscatter.
+        // Normalization removes the cross-swath brightness gradient so
+        // that RVI values are comparable across the full IW swath.
+        let vv_norm = normalize_incidence_angle_linear(vv_lin, inc_angle_deg);
+        let vh_norm = normalize_incidence_angle_linear(vh_lin, inc_angle_deg);
+        let mut out = vv_norm.clone();
+        azip!((out in &mut out, &vv in &vv_norm, &vh in &vh_norm) *out = (4.0 * vh) / (vv + vh));
         out
     } else if index_type == "S1_SMI" {
         // S1_SMI is calculated on dB scale, normalized by incidence angle
@@ -138,6 +226,26 @@ fn compute_index(
         out
     } else {
         vv_lin.clone()
+    }
+}
+
+/// Compute index for L-band SAR (HH/HV) with incidence angle normalization.
+fn compute_index_sar(
+    hh_lin: &Array2<f32>,
+    hv_lin: &Array2<f32>,
+    inc_angle_deg: f32,
+    index_type: &str,
+) -> Array2<f32> {
+    if index_type == "L_RVI" {
+        // L-band RVI: same formula as C-band but with HH/HV
+        // L_RVI = 4 * HV / (HH + HV), normalized for incidence angle
+        let hh_norm = normalize_incidence_angle_linear(hh_lin, inc_angle_deg);
+        let hv_norm = normalize_incidence_angle_linear(hv_lin, inc_angle_deg);
+        let mut out = hh_norm.clone();
+        azip!((out in &mut out, &hh in &hh_norm, &hv in &hv_norm) *out = (4.0 * hv) / (hh + hv));
+        out
+    } else {
+        hh_lin.clone()
     }
 }
 

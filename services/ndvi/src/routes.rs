@@ -15,7 +15,7 @@ use crate::{
     db::AppState,
     metrics,
     models::{ComputeRequest, NdviInput, PreprocessRequest},
-    pipeline::run_pipeline,
+    pipeline::{run_pipeline, run_pipeline_sar},
 };
 use ndarray::Array2;
 
@@ -152,38 +152,91 @@ async fn preprocess(Json(payload): Json<PreprocessRequest>) -> Response {
 
 async fn compute(Json(payload): Json<ComputeRequest>) -> Response {
     let expected_len = payload.width * payload.height;
-    if payload.vv.len() != expected_len || payload.vh.len() != expected_len {
-        let body = Envelope::failure(
-            "Invalid input dimensions",
-            Some(json!({
-                "detail": format!(
-                    "expected {} elements per band, got vv={} vh={}",
-                    expected_len,
-                    payload.vv.len(),
-                    payload.vh.len()
-                )
-            })),
-        );
-        return (StatusCode::BAD_REQUEST, Json(body)).into_response();
-    }
-
-    let vv_raw = match Array2::from_shape_vec((payload.height, payload.width), payload.vv) {
-        Ok(arr) => arr,
-        Err(err) => {
-            let body = Envelope::failure("Shape error", Some(json!({"detail": err.to_string()})));
-            return (StatusCode::BAD_REQUEST, Json(body)).into_response();
-        }
-    };
-    let vh_raw = match Array2::from_shape_vec((payload.height, payload.width), payload.vh) {
-        Ok(arr) => arr,
-        Err(err) => {
-            let body = Envelope::failure("Shape error", Some(json!({"detail": err.to_string()})));
-            return (StatusCode::BAD_REQUEST, Json(body)).into_response();
-        }
-    };
-
     let inc_angle_deg = payload.inc_angle_deg.unwrap_or(40.0);
-    let result = run_pipeline(vv_raw, vh_raw, inc_angle_deg, &payload.index_type);
+
+    let result = if payload.index_type == "L_RVI" {
+        let hh = match payload.hh {
+            Some(hh) => hh,
+            None => {
+                let body = Envelope::failure(
+                    "Missing bands",
+                    Some(json!({"detail": "L_RVI requires hh and hv arrays"})),
+                );
+                return (StatusCode::BAD_REQUEST, Json(body)).into_response();
+            }
+        };
+        let hv = match payload.hv {
+            Some(hv) => hv,
+            None => {
+                let body = Envelope::failure(
+                    "Missing bands",
+                    Some(json!({"detail": "L_RVI requires hh and hv arrays"})),
+                );
+                return (StatusCode::BAD_REQUEST, Json(body)).into_response();
+            }
+        };
+        if hh.len() != expected_len || hv.len() != expected_len {
+            let body = Envelope::failure(
+                "Invalid input dimensions",
+                Some(json!({
+                    "detail": format!(
+                        "expected {} elements per band, got hh={} hv={}",
+                        expected_len, hh.len(), hv.len()
+                    )
+                })),
+            );
+            return (StatusCode::BAD_REQUEST, Json(body)).into_response();
+        }
+        let hh_raw = match Array2::from_shape_vec((payload.height, payload.width), hh) {
+            Ok(arr) => arr,
+            Err(err) => {
+                let body =
+                    Envelope::failure("Shape error", Some(json!({"detail": err.to_string()})));
+                return (StatusCode::BAD_REQUEST, Json(body)).into_response();
+            }
+        };
+        let hv_raw = match Array2::from_shape_vec((payload.height, payload.width), hv) {
+            Ok(arr) => arr,
+            Err(err) => {
+                let body =
+                    Envelope::failure("Shape error", Some(json!({"detail": err.to_string()})));
+                return (StatusCode::BAD_REQUEST, Json(body)).into_response();
+            }
+        };
+        run_pipeline_sar(hh_raw, hv_raw, inc_angle_deg, &payload.index_type)
+    } else {
+        if payload.vv.len() != expected_len || payload.vh.len() != expected_len {
+            let body = Envelope::failure(
+                "Invalid input dimensions",
+                Some(json!({
+                    "detail": format!(
+                        "expected {} elements per band, got vv={} vh={}",
+                        expected_len,
+                        payload.vv.len(),
+                        payload.vh.len()
+                    )
+                })),
+            );
+            return (StatusCode::BAD_REQUEST, Json(body)).into_response();
+        }
+        let vv_raw = match Array2::from_shape_vec((payload.height, payload.width), payload.vv) {
+            Ok(arr) => arr,
+            Err(err) => {
+                let body =
+                    Envelope::failure("Shape error", Some(json!({"detail": err.to_string()})));
+                return (StatusCode::BAD_REQUEST, Json(body)).into_response();
+            }
+        };
+        let vh_raw = match Array2::from_shape_vec((payload.height, payload.width), payload.vh) {
+            Ok(arr) => arr,
+            Err(err) => {
+                let body =
+                    Envelope::failure("Shape error", Some(json!({"detail": err.to_string()})));
+                return (StatusCode::BAD_REQUEST, Json(body)).into_response();
+            }
+        };
+        run_pipeline(vv_raw, vh_raw, inc_angle_deg, &payload.index_type)
+    };
 
     (
         StatusCode::OK,
