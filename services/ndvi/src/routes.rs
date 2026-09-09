@@ -20,6 +20,11 @@ use crate::{
 use ndarray::Array2;
 
 pub fn router(state: AppState) -> Router {
+    let preprocess_concurrency_limit: usize = std::env::var("PREPROCESS_CONCURRENCY_LIMIT")
+        .ok()
+        .and_then(|val| val.parse().ok())
+        .unwrap_or(32);
+
     Router::new()
         .route("/", get(index))
         .route("/healthz", get(healthz))
@@ -29,7 +34,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/ndvi", post(create_ndvi).get(ndvi_info))
         .route(
             "/api/v1/preprocess",
-            post(preprocess).route_layer(ConcurrencyLimitLayer::new(2)),
+            post(preprocess).route_layer(ConcurrencyLimitLayer::new(preprocess_concurrency_limit)),
         )
         .route("/api/v1/compute", post(compute))
         .route_layer(middleware::from_fn(metrics::metrics_middleware))
@@ -124,16 +129,18 @@ async fn create_ndvi(State(state): State<AppState>, Json(payload): Json<NdviInpu
 async fn preprocess(Json(payload): Json<PreprocessRequest>) -> Response {
     let reader = CogReader::new();
 
-    // In a real app we'd convert lat/lon bbox to tile x/y
-    // For now we mock the read
-    let vv_data = reader
-        .read_tile(&payload.vv_href, 0, 0)
-        .await
-        .unwrap_or_else(|_| vec![0.1; 10000]);
-    let vh_data = reader
-        .read_tile(&payload.vh_href, 0, 0)
-        .await
-        .unwrap_or_else(|_| vec![0.1; 10000]);
+    let vv_href = payload.vv_href;
+    let vh_href = payload.vh_href;
+    let index_type = payload.index_type;
+
+    // Fetch VV and VH COG tiles concurrently
+    let (vv_res, vh_res) = tokio::join!(
+        reader.read_tile(&vv_href, 0, 0),
+        reader.read_tile(&vh_href, 0, 0)
+    );
+
+    let vv_data = vv_res.unwrap_or_else(|_| vec![0.1; 10000]);
+    let vh_data = vh_res.unwrap_or_else(|_| vec![0.1; 10000]);
 
     let vv_raw = Array2::from_shape_vec((100, 100), vv_data).unwrap();
     let vh_raw = Array2::from_shape_vec((100, 100), vh_data).unwrap();
@@ -141,7 +148,22 @@ async fn preprocess(Json(payload): Json<PreprocessRequest>) -> Response {
     // Parse orbit to inc_angle (mock for now, assume 40.0)
     let inc_angle_deg = 40.0;
 
-    let result = run_pipeline(vv_raw, vh_raw, inc_angle_deg, &payload.index_type);
+    // Offload heavy CPU filtering to blocking thread pool
+    let result = match tokio::task::spawn_blocking(move || {
+        run_pipeline(vv_raw, vh_raw, inc_angle_deg, &index_type)
+    })
+    .await
+    {
+        Ok(res) => res,
+        Err(err) => {
+            tracing::error!(error = ?err, "blocking preprocess task failed");
+            let body = Envelope::failure(
+                "Internal Error",
+                Some(json!({"detail": "preprocess computation failed"})),
+            );
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response();
+        }
+    };
 
     (
         StatusCode::OK,
@@ -153,8 +175,9 @@ async fn preprocess(Json(payload): Json<PreprocessRequest>) -> Response {
 async fn compute(Json(payload): Json<ComputeRequest>) -> Response {
     let expected_len = payload.width * payload.height;
     let inc_angle_deg = payload.inc_angle_deg.unwrap_or(40.0);
+    let index_type = payload.index_type.clone();
 
-    let result = if payload.index_type == "L_RVI" {
+    let compute_task = if payload.index_type == "L_RVI" {
         let hh = match payload.hh {
             Some(hh) => hh,
             None => {
@@ -203,7 +226,9 @@ async fn compute(Json(payload): Json<ComputeRequest>) -> Response {
                 return (StatusCode::BAD_REQUEST, Json(body)).into_response();
             }
         };
-        run_pipeline_sar(hh_raw, hv_raw, inc_angle_deg, &payload.index_type)
+        tokio::task::spawn_blocking(move || {
+            run_pipeline_sar(hh_raw, hv_raw, inc_angle_deg, &index_type)
+        })
     } else {
         if payload.vv.len() != expected_len || payload.vh.len() != expected_len {
             let body = Envelope::failure(
@@ -235,7 +260,21 @@ async fn compute(Json(payload): Json<ComputeRequest>) -> Response {
                 return (StatusCode::BAD_REQUEST, Json(body)).into_response();
             }
         };
-        run_pipeline(vv_raw, vh_raw, inc_angle_deg, &payload.index_type)
+        tokio::task::spawn_blocking(move || {
+            run_pipeline(vv_raw, vh_raw, inc_angle_deg, &index_type)
+        })
+    };
+
+    let result = match compute_task.await {
+        Ok(res) => res,
+        Err(err) => {
+            tracing::error!(error = ?err, "blocking compute task failed");
+            let body = Envelope::failure(
+                "Internal Error",
+                Some(json!({"detail": "compute calculation failed"})),
+            );
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response();
+        }
     };
 
     (

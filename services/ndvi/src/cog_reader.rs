@@ -13,7 +13,7 @@ impl CogReader {
         _href: &str,
         _tile_x: u32,
         _tile_y: u32,
-    ) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<f32>, Box<dyn std::error::Error + Send + Sync>> {
         let mut retries = 3;
         let mut delay = Duration::from_secs(1);
 
