@@ -148,9 +148,21 @@ async fn preprocess(Json(payload): Json<PreprocessRequest>) -> Response {
     // Parse orbit to inc_angle (mock for now, assume 40.0)
     let inc_angle_deg = 40.0;
 
+    let alpha = payload.coefficients.as_ref().map_or(0.70, |c| c.alpha);
+    let beta = payload.coefficients.as_ref().map_or(-0.30, |c| c.beta);
+    let gamma = payload.coefficients.as_ref().map_or(0.50, |c| c.gamma);
+
     // Offload heavy CPU filtering to blocking thread pool
     let result = match tokio::task::spawn_blocking(move || {
-        run_pipeline(vv_raw, vh_raw, inc_angle_deg, &index_type)
+        run_pipeline(
+            vv_raw,
+            vh_raw,
+            inc_angle_deg,
+            &index_type,
+            alpha,
+            beta,
+            gamma,
+        )
     })
     .await
     {
@@ -176,6 +188,9 @@ async fn compute(Json(payload): Json<ComputeRequest>) -> Response {
     let expected_len = payload.width * payload.height;
     let inc_angle_deg = payload.inc_angle_deg.unwrap_or(40.0);
     let index_type = payload.index_type.clone();
+    let alpha = payload.alpha.unwrap_or(0.70);
+    let beta = payload.beta.unwrap_or(-0.30);
+    let gamma = payload.gamma.unwrap_or(0.50);
 
     let compute_task = if payload.index_type == "L_RVI" {
         let hh = match payload.hh {
@@ -261,7 +276,15 @@ async fn compute(Json(payload): Json<ComputeRequest>) -> Response {
             }
         };
         tokio::task::spawn_blocking(move || {
-            run_pipeline(vv_raw, vh_raw, inc_angle_deg, &index_type)
+            run_pipeline(
+                vv_raw,
+                vh_raw,
+                inc_angle_deg,
+                &index_type,
+                alpha,
+                beta,
+                gamma,
+            )
         })
     };
 

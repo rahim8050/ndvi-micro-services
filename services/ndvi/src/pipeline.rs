@@ -7,6 +7,9 @@ pub fn run_pipeline(
     vh_raw: Array2<f32>,
     inc_angle_deg: f32,
     index_type: &str,
+    alpha: f32,
+    beta: f32,
+    gamma: f32,
 ) -> PreprocessResponse {
     let (vv, mask_vv) = mask_nodata(&vv_raw);
     let (vh, mask_vh) = mask_nodata(&vh_raw);
@@ -28,7 +31,15 @@ pub fn run_pipeline(
     };
 
     // Compute index (handles dB conversion internally if needed)
-    let index = compute_index(&vv_filtered, &vh_filtered, angle, index_type);
+    let index = compute_index(
+        &vv_filtered,
+        &vh_filtered,
+        angle,
+        index_type,
+        alpha,
+        beta,
+        gamma,
+    );
 
     compute_stats(&index, &valid_mask)
 }
@@ -199,6 +210,9 @@ fn compute_index(
     vh_lin: &Array2<f32>,
     inc_angle_deg: f32,
     index_type: &str,
+    alpha: f32,
+    beta: f32,
+    gamma: f32,
 ) -> Array2<f32> {
     if index_type == "RVI" {
         // RVI on incidence-angle-normalized linear backscatter.
@@ -210,7 +224,8 @@ fn compute_index(
         azip!((out in &mut out, &vv in &vv_norm, &vh in &vh_norm) *out = (4.0 * vh) / (vv + vh));
         out
     } else if index_type == "S1_SMI" {
-        // S1_SMI is calculated on dB scale, normalized by incidence angle
+        // S1_SMI is calculated on dB scale, normalized by incidence angle.
+        // Coefficients are provided by the caller (Django calibration).
         let vv_db = linear_to_db(vv_lin);
         let vh_db = linear_to_db(vh_lin);
 
@@ -218,9 +233,6 @@ fn compute_index(
         let vh_db_norm = normalize_incidence_angle(&vh_db, inc_angle_deg);
 
         let mut out = vv_db_norm.clone();
-        let alpha = 0.70;
-        let beta = -0.30;
-        let gamma = 0.50;
 
         azip!((out in &mut out, &vv in &vv_db_norm, &vh in &vh_db_norm) *out = alpha * vv + beta * vh + gamma);
         out

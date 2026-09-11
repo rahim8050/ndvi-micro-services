@@ -122,4 +122,12 @@ pub struct ComputeRequest {
     pub height: usize,
     pub inc_angle_deg: Option<f32>,
     pub index_type: String,
+    #[serde(default)]
+    pub alpha: Option<f32>,
+    #[serde(default)]
+    pub beta: Option<f32>,
+    #[serde(default)]
+    pub gamma: Option<f32>,
+    #[serde(default)]
+    pub orbit_state: Option<String>,
 }
