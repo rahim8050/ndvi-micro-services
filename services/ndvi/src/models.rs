@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::Value;
@@ -130,4 +132,38 @@ pub struct ComputeRequest {
     pub gamma: Option<f32>,
     #[serde(default)]
     pub orbit_state: Option<String>,
+}
+
+// ── Optical / spectral index models ──────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct SpectralRequest {
+    /// Named band arrays keyed by band name (e.g. "B04", "B08").
+    pub bands: HashMap<String, Vec<f32>>,
+    pub width: usize,
+    pub height: usize,
+    pub index_type: String,
+    /// Optional QA/cloud mask band. Pixels where this band is non-zero are
+    /// treated as cloud/shadow and excluded from statistics.
+    #[serde(default)]
+    pub cloud_mask: Option<Vec<f32>>,
+    /// Maximum allowed cloud fraction (0.0–1.0). If the computed cloud
+    /// fraction exceeds this, `cloud_fraction` is still returned but the
+    /// caller can decide to reject the result.
+    #[serde(default)]
+    pub cloud_threshold: Option<f32>,
+    /// Nodata value (pixels at or below this are masked). Default 0.0.
+    #[serde(default)]
+    pub nodata: Option<f32>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct SpectralResponse {
+    pub mean: Option<f64>,
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+    pub sample_count: u64,
+    pub cloud_fraction: f64,
+    pub valid_pixel_fraction: f64,
+    pub processing_ms: f64,
 }

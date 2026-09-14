@@ -19,6 +19,7 @@ pub mod metrics;
 pub mod models;
 pub mod pipeline;
 pub mod routes;
+pub mod spectral;
 
 pub async fn run() {
     dotenv().ok();

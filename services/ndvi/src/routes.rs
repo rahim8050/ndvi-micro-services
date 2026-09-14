@@ -14,8 +14,9 @@ use crate::{
     cog_reader::CogReader,
     db::AppState,
     metrics,
-    models::{ComputeRequest, NdviInput, PreprocessRequest},
+    models::{ComputeRequest, NdviInput, PreprocessRequest, SpectralRequest},
     pipeline::{run_pipeline, run_pipeline_sar},
+    spectral::run_pipeline_spectral,
 };
 use ndarray::Array2;
 
@@ -37,6 +38,7 @@ pub fn router(state: AppState) -> Router {
             post(preprocess).route_layer(ConcurrencyLimitLayer::new(preprocess_concurrency_limit)),
         )
         .route("/api/v1/compute", post(compute))
+        .route("/api/v1/spectral", post(spectral))
         .route_layer(middleware::from_fn(metrics::metrics_middleware))
         .with_state(state)
 }
@@ -295,6 +297,33 @@ async fn compute(Json(payload): Json<ComputeRequest>) -> Response {
             let body = Envelope::failure(
                 "Internal Error",
                 Some(json!({"detail": "compute calculation failed"})),
+            );
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response();
+        }
+    };
+
+    (
+        StatusCode::OK,
+        Json(Envelope::success("OK", serde_json::json!(result))),
+    )
+        .into_response()
+}
+
+async fn spectral(Json(payload): Json<SpectralRequest>) -> Response {
+    let result = match tokio::task::spawn_blocking(move || run_pipeline_spectral(&payload)).await {
+        Ok(Ok(res)) => res,
+        Ok(Err(err)) => {
+            let body = Envelope::failure(
+                "Validation error",
+                Some(json!({"detail": err})),
+            );
+            return (StatusCode::BAD_REQUEST, Json(body)).into_response();
+        }
+        Err(err) => {
+            tracing::error!(error = ?err, "blocking spectral task failed");
+            let body = Envelope::failure(
+                "Internal Error",
+                Some(json!({"detail": "spectral computation failed"})),
             );
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response();
         }
