@@ -171,14 +171,15 @@ fn evi(bands: &HashMap<String, Array2<f32>>) -> Array2<f32> {
     out
 }
 
-/// Iron Oxide = B11 / B12
-/// Uses Sentinel-2 bands: B11 (SWIR1), B12 (SWIR2).
+/// Iron Oxide = B04 / B02
+/// Uses Sentinel-2 bands: B04 (Red), B02 (Blue).
+/// Highlights ferric iron oxide absorption of blue light in bare soil.
 fn iron_oxide(bands: &HashMap<String, Array2<f32>>) -> Array2<f32> {
-    let b11 = &bands["B11"];
-    let b12 = &bands["B12"];
-    let mut out = b11.clone();
-    ndarray::azip!((out in &mut out, &a in b11, &b in b12) {
-        *out = if b.abs() > 1e-10 { a / b } else { f32::NAN };
+    let red = &bands["B04"];
+    let blue = &bands["B02"];
+    let mut out = red.clone();
+    ndarray::azip!((out in &mut out, &r in red, &b in blue) {
+        *out = if b.abs() > 1e-10 { r / b } else { f32::NAN };
     });
     out
 }
