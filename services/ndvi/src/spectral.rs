@@ -19,7 +19,11 @@ pub fn run_pipeline_spectral(req: &SpectralRequest) -> Result<SpectralResponse, 
         if values.len() != expected {
             return Err(format!(
                 "band '{}': expected {} elements ({}x{}), got {}",
-                name, expected, req.width, req.height, values.len()
+                name,
+                expected,
+                req.width,
+                req.height,
+                values.len()
             ));
         }
         let arr = Array2::from_shape_vec((req.height, req.width), values.clone())

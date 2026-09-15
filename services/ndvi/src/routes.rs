@@ -313,10 +313,7 @@ async fn spectral(Json(payload): Json<SpectralRequest>) -> Response {
     let result = match tokio::task::spawn_blocking(move || run_pipeline_spectral(&payload)).await {
         Ok(Ok(res)) => res,
         Ok(Err(err)) => {
-            let body = Envelope::failure(
-                "Validation error",
-                Some(json!({"detail": err})),
-            );
+            let body = Envelope::failure("Validation error", Some(json!({"detail": err})));
             return (StatusCode::BAD_REQUEST, Json(body)).into_response();
         }
         Err(err) => {
