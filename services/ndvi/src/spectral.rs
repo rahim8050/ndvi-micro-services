@@ -63,6 +63,14 @@ pub fn run_pipeline_spectral(req: &SpectralRequest) -> Result<SpectralResponse, 
     let mut valid_mask = cloud_mask.mapv(|c| !c);
     ndarray::azip!((v in &mut valid_mask, &n in &nodata_mask) *v = *v && !n);
 
+    // Normalise reflectance bands from 0–10000 to 0–1 when needed.
+    // Sentinel-2 L2A surface reflectance is stored as uint16 in the
+    // 0–10000 range.  Ratio-based indices (NDVI, NDWI, NDMI, NDRE,
+    // iron oxide) are scale-invariant, but indices with additive
+    // constants in the denominator (EVI: +1.0, biomass: –10.3) require
+    // 0–1 reflectance to produce correct values.
+    normalize_bands_if_needed(&mut bands);
+
     // Compute index.
     let index = compute_spectral_index(&bands, &req.index_type)?;
 
@@ -86,6 +94,19 @@ pub fn run_pipeline_spectral(req: &SpectralRequest) -> Result<SpectralResponse, 
         valid_pixel_fraction,
         processing_ms: 0.0,
     })
+}
+
+/// If any band has a value > 1.0, assume 0–10000 reflectance and
+/// normalise all bands to 0–1 by dividing by 10000.  Ratio-based
+/// indices (NDVI, etc.) are scale-invariant so this is a no-op for
+/// them; indices with additive constants (EVI, biomass) require it.
+fn normalize_bands_if_needed(bands: &mut HashMap<String, Array2<f32>>) {
+    let needs_normalization = bands.values().any(|arr| arr.iter().any(|v| *v > 1.0));
+    if needs_normalization {
+        for arr in bands.values_mut() {
+            arr.mapv_inplace(|v| v / 10000.0);
+        }
+    }
 }
 
 /// Dispatch to the correct per-index formula.
@@ -221,7 +242,7 @@ fn compute_stats_par(index: &Array2<f32>, mask: &Array2<bool>) -> (f64, f32, f32
 mod tests {
     use super::*;
 
-    fn make_2x2(band: &str, v: [f32; 4]) -> Array2<f32> {
+    fn make_2x2(_band: &str, v: [f32; 4]) -> Array2<f32> {
         Array2::from_shape_vec((2, 2), v.to_vec()).unwrap()
     }
 
@@ -304,5 +325,41 @@ mod tests {
         let req = base_request("NDVI", bands);
         let res = run_pipeline_spectral(&req);
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_evi_with_reflectance_10000() {
+        let mut bands = HashMap::new();
+        // Sentinel-2 0–10000 reflectance values
+        bands.insert("B08".into(), vec![3646.0, 4376.0, 3100.0, 4200.0]);
+        bands.insert("B04".into(), vec![1540.0, 1894.0, 1400.0, 1700.0]);
+        bands.insert("B02".into(), vec![1394.0, 1497.0, 1350.0, 1450.0]);
+        let req = base_request("EVI", bands);
+        let res = run_pipeline_spectral(&req).unwrap();
+        let mean = res.mean.unwrap();
+        // With normalisation, EVI should be in 0–1 range.
+        // Without normalisation it would be ~2.5.
+        assert!(
+            mean > -0.5 && mean < 1.0,
+            "EVI mean={} should be in [-0.5, 1.0] after normalisation",
+            mean
+        );
+    }
+
+    #[test]
+    fn test_evi_already_normalised() {
+        let mut bands = HashMap::new();
+        // Already normalised 0–1 reflectance
+        bands.insert("B08".into(), vec![0.3646, 0.4376, 0.3100, 0.4200]);
+        bands.insert("B04".into(), vec![0.1540, 0.1894, 0.1400, 0.1700]);
+        bands.insert("B02".into(), vec![0.1394, 0.1497, 0.1350, 0.1450]);
+        let req = base_request("EVI", bands);
+        let res = run_pipeline_spectral(&req).unwrap();
+        let mean = res.mean.unwrap();
+        assert!(
+            mean > 0.3 && mean < 0.6,
+            "EVI mean={} should be ~0.42 for 0–1 input",
+            mean
+        );
     }
 }
