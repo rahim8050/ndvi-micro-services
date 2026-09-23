@@ -129,6 +129,7 @@ async fn create_ndvi(State(state): State<AppState>, Json(payload): Json<NdviInpu
 }
 
 async fn preprocess(Json(payload): Json<PreprocessRequest>) -> Response {
+    let start = std::time::Instant::now();
     let reader = CogReader::new();
 
     let vv_href = payload.vv_href;
@@ -178,6 +179,7 @@ async fn preprocess(Json(payload): Json<PreprocessRequest>) -> Response {
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response();
         }
     };
+    metrics::observe_preprocess(start.elapsed().as_secs_f64());
 
     (
         StatusCode::OK,
@@ -187,6 +189,7 @@ async fn preprocess(Json(payload): Json<PreprocessRequest>) -> Response {
 }
 
 async fn compute(Json(payload): Json<ComputeRequest>) -> Response {
+    let start = std::time::Instant::now();
     let expected_len = payload.width * payload.height;
     let inc_angle_deg = payload.inc_angle_deg.unwrap_or(40.0);
     let index_type = payload.index_type.clone();
@@ -301,6 +304,7 @@ async fn compute(Json(payload): Json<ComputeRequest>) -> Response {
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response();
         }
     };
+    metrics::observe_sar(start.elapsed().as_secs_f64());
 
     (
         StatusCode::OK,
@@ -310,6 +314,7 @@ async fn compute(Json(payload): Json<ComputeRequest>) -> Response {
 }
 
 async fn spectral(Json(payload): Json<SpectralRequest>) -> Response {
+    let start = std::time::Instant::now();
     let result = match tokio::task::spawn_blocking(move || run_pipeline_spectral(&payload)).await {
         Ok(Ok(res)) => res,
         Ok(Err(err)) => {
@@ -325,6 +330,7 @@ async fn spectral(Json(payload): Json<SpectralRequest>) -> Response {
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response();
         }
     };
+    metrics::observe_spectral(start.elapsed().as_secs_f64());
 
     (
         StatusCode::OK,
