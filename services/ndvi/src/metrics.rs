@@ -22,8 +22,8 @@ static SPECTRAL_PROCESSING_SECONDS: Lazy<Histogram> = Lazy::new(|| {
     .buckets(vec![
         0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
     ]);
-    let histogram = Histogram::with_opts(opts)
-        .expect("ndvi_spectral_compute_seconds metric can be created");
+    let histogram =
+        Histogram::with_opts(opts).expect("ndvi_spectral_compute_seconds metric can be created");
     prometheus::default_registry()
         .register(Box::new(histogram.clone()))
         .expect("ndvi_spectral_compute_seconds can be registered");
@@ -38,8 +38,8 @@ static SAR_PROCESSING_SECONDS: Lazy<Histogram> = Lazy::new(|| {
     .buckets(vec![
         0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
     ]);
-    let histogram = Histogram::with_opts(opts)
-        .expect("ndvi_sar_compute_seconds metric can be created");
+    let histogram =
+        Histogram::with_opts(opts).expect("ndvi_sar_compute_seconds metric can be created");
     prometheus::default_registry()
         .register(Box::new(histogram.clone()))
         .expect("ndvi_sar_compute_seconds can be registered");
@@ -54,8 +54,8 @@ static PREPROCESS_SECONDS: Lazy<Histogram> = Lazy::new(|| {
     .buckets(vec![
         0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
     ]);
-    let histogram = Histogram::with_opts(opts)
-        .expect("ndvi_preprocess_seconds metric can be created");
+    let histogram =
+        Histogram::with_opts(opts).expect("ndvi_preprocess_seconds metric can be created");
     prometheus::default_registry()
         .register(Box::new(histogram.clone()))
         .expect("ndvi_preprocess_seconds can be registered");
