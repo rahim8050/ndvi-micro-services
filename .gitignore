@@ -5,3 +5,4 @@
 !.env.example
 warp-terminal.deb
 warp-terminal.tar.gz
+*.log
