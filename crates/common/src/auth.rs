@@ -133,6 +133,7 @@ pub fn validate_jwt(token: &str, config: &JwtConfig) -> Result<AuthContext, Auth
     })
 }
 
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait ApiKeyValidator: Send + Sync {
     async fn validate(&self, raw_key: &str) -> Result<AuthContext, AuthError>;
