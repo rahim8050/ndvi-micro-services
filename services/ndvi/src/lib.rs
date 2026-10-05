@@ -52,10 +52,16 @@ pub async fn run() {
     let throttle_layer = ThrottleLayer::from_env();
 
     let state = db::AppState { pool };
-    let app: Router =
-        routes::router(state).layer(ServiceBuilder::new().layer(throttle_layer).layer(
-            middleware::from_fn_with_state(auth_state, ndvi_common::auth::auth_middleware),
-        ));
+    // Auth must be the outer layer so the throttle layer can see AuthContext
+    // (otherwise everything falls into the anon/IP bucket).
+    let app: Router = routes::router(state).layer(
+        ServiceBuilder::new()
+            .layer(middleware::from_fn_with_state(
+                auth_state,
+                ndvi_common::auth::auth_middleware,
+            ))
+            .layer(throttle_layer),
+    );
 
     let port: u16 = env::var("PORT")
         .ok()

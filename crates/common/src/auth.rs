@@ -22,6 +22,8 @@ use http::{Request, StatusCode};
 use serde_json::json;
 
 pub const API_KEY_PREFIX: &str = "wk_live_";
+/// Header carrying the Django gateway's service-to-service token.
+pub const SERVICE_AUTH_HEADER: &str = "x-service-authorization";
 const PREFIX_LENGTH: usize = 12;
 const LAST_USED_AT_WRITE_MINUTES: i64 = 5;
 
@@ -43,6 +45,24 @@ impl JwtConfig {
             issuer,
             audience,
         })
+    }
+}
+
+/// Identity expected on tokens minted by the Django gateway for internal calls.
+/// Uses the same signing key as [`JwtConfig`]; only iss/aud differ.
+#[derive(Debug, Clone)]
+pub struct ServiceJwtConfig {
+    pub issuer: String,
+    pub audience: String,
+}
+
+impl ServiceJwtConfig {
+    pub fn from_env() -> Self {
+        let issuer =
+            std::env::var("SERVICE_JWT_ISSUER").unwrap_or_else(|_| "django-gateway".to_string());
+        let audience =
+            std::env::var("SERVICE_JWT_AUDIENCE").unwrap_or_else(|_| "internal-rust".to_string());
+        Self { issuer, audience }
     }
 }
 
@@ -68,8 +88,15 @@ pub struct ApiKeyInfo {
 
 #[derive(Debug, Clone)]
 pub enum AuthKind {
-    Jwt { subject: String },
+    Jwt {
+        subject: String,
+    },
     ApiKey(ApiKeyInfo),
+    /// Authenticated gateway service (Django → Rust internal hop).
+    Service {
+        subject: String,
+        orig_subject: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -82,6 +109,8 @@ impl AuthContext {
         match &self.kind {
             AuthKind::Jwt { subject } => format!("user:{subject}"),
             AuthKind::ApiKey(info) => format!("api_key:{}", info.key_id),
+            // subject is already "service:<name>"; keep the key verbatim.
+            AuthKind::Service { subject, .. } => subject.clone(),
         }
     }
 }
@@ -99,6 +128,16 @@ struct Claims {
     sub: String,
     #[allow(dead_code)]
     exp: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct ServiceClaims {
+    sub: String,
+    #[allow(dead_code)]
+    exp: usize,
+    /// Original end-client subject, forwarded for audit purposes.
+    #[serde(default)]
+    orig_sub: Option<String>,
 }
 
 pub fn parse_bearer_token(header: &str) -> Option<String> {
@@ -129,6 +168,30 @@ pub fn validate_jwt(token: &str, config: &JwtConfig) -> Result<AuthContext, Auth
     Ok(AuthContext {
         kind: AuthKind::Jwt {
             subject: data.claims.sub,
+        },
+    })
+}
+
+/// Validate the Django gateway's service token (stateless, HS256, local key).
+/// Requires the service-specific `iss`/`aud`; client JWTs cannot satisfy this
+/// and service tokens cannot satisfy [`validate_jwt`] when iss/aud are set.
+pub fn validate_service_jwt(
+    token: &str,
+    jwt_config: &JwtConfig,
+    service_config: &ServiceJwtConfig,
+) -> Result<AuthContext, AuthError> {
+    let mut validation = Validation::new(Algorithm::HS256);
+    validation.set_issuer(&[service_config.issuer.as_str()]);
+    validation.set_audience(&[service_config.audience.as_str()]);
+
+    let key = DecodingKey::from_secret(jwt_config.signing_key.as_bytes());
+    let data = decode::<ServiceClaims>(token, &key, &validation)
+        .map_err(|_| AuthError::Invalid("invalid_service_jwt"))?;
+
+    Ok(AuthContext {
+        kind: AuthKind::Service {
+            subject: data.claims.sub,
+            orig_subject: data.claims.orig_sub,
         },
     })
 }
@@ -265,11 +328,23 @@ async fn update_last_used(pool: &MySqlPool, info: &ApiKeyInfo, now: DateTime<Utc
 }
 
 pub async fn authenticate_request(
+    service_header: Option<&str>,
     auth_header: Option<&str>,
     api_key_header: Option<&str>,
     jwt_config: &JwtConfig,
+    service_config: &ServiceJwtConfig,
     api_key_validator: Option<&dyn ApiKeyValidator>,
 ) -> Result<AuthContext, AuthError> {
+    // Internal service token takes precedence; on any failure fall through to
+    // the client credential so rollout stays zero-downtime.
+    if let Some(header) = service_header {
+        if let Some(token) = parse_bearer_token(header) {
+            if let Ok(context) = validate_service_jwt(&token, jwt_config, service_config) {
+                return Ok(context);
+            }
+        }
+    }
+
     if let Some(header) = auth_header {
         if let Some(token) = parse_bearer_token(header) {
             return validate_jwt(&token, jwt_config);
@@ -301,10 +376,15 @@ pub fn api_key_header(req: &http::Request<Body>) -> Option<String> {
     header_from_request(req, "x-api-key")
 }
 
+pub fn service_auth_header(req: &http::Request<Body>) -> Option<String> {
+    header_from_request(req, SERVICE_AUTH_HEADER)
+}
+
 #[derive(Clone)]
 pub struct AuthState {
     pub enabled: bool,
     pub jwt: Option<JwtConfig>,
+    pub service: ServiceJwtConfig,
     pub api_key_validator: Option<Arc<dyn ApiKeyValidator>>,
 }
 
@@ -319,6 +399,7 @@ impl AuthState {
             return Ok(Self {
                 enabled: false,
                 jwt: None,
+                service: ServiceJwtConfig::from_env(),
                 api_key_validator,
             });
         }
@@ -326,6 +407,7 @@ impl AuthState {
         Ok(Self {
             enabled: true,
             jwt: Some(jwt),
+            service: ServiceJwtConfig::from_env(),
             api_key_validator,
         })
     }
@@ -354,13 +436,16 @@ pub async fn auth_middleware(
         }
     };
 
+    let service_header = service_auth_header(&req);
     let auth_header = auth_header(&req);
     let api_key_header = api_key_header(&req);
 
     let result = authenticate_request(
+        service_header.as_deref(),
         auth_header.as_deref(),
         api_key_header.as_deref(),
         jwt_config,
+        &state.service,
         state.api_key_validator.as_deref(),
     )
     .await;
@@ -393,4 +478,241 @@ fn is_bypass_path(path: &str) -> bool {
         .filter(|p| !p.is_empty())
         .collect();
     paths.contains(&path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::throttle::{ThrottleConfig, ThrottleLayer, ThrottleState};
+    use axum::{middleware, routing::get, Router};
+    use jsonwebtoken::{encode, EncodingKey, Header};
+    use serde::Serialize;
+    use tower::{ServiceBuilder, ServiceExt};
+
+    const SECRET: &str = "test-signing-key-0123456789abcdef0123456789abcdef";
+
+    #[derive(Serialize)]
+    struct ServiceTestClaims {
+        sub: String,
+        iss: String,
+        aud: String,
+        exp: usize,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        orig_sub: Option<String>,
+    }
+
+    #[derive(Serialize)]
+    struct ClientTestClaims {
+        sub: String,
+        exp: usize,
+    }
+
+    fn jwt_config() -> JwtConfig {
+        JwtConfig {
+            signing_key: SECRET.to_string(),
+            issuer: None,
+            audience: None,
+        }
+    }
+
+    fn service_config() -> ServiceJwtConfig {
+        ServiceJwtConfig {
+            issuer: "django-gateway".to_string(),
+            audience: "internal-rust".to_string(),
+        }
+    }
+
+    fn sign<T: Serialize>(claims: &T) -> String {
+        encode(
+            &Header::new(Algorithm::HS256),
+            claims,
+            &EncodingKey::from_secret(SECRET.as_bytes()),
+        )
+        .expect("token encodes")
+    }
+
+    fn mint_service(iss: &str, aud: &str, exp: usize, orig_sub: Option<&str>) -> String {
+        sign(&ServiceTestClaims {
+            sub: "service:django".to_string(),
+            iss: iss.to_string(),
+            aud: aud.to_string(),
+            exp,
+            orig_sub: orig_sub.map(str::to_string),
+        })
+    }
+
+    fn future() -> usize {
+        Utc::now().timestamp() as usize + 300
+    }
+
+    fn past() -> usize {
+        Utc::now().timestamp() as usize - 300
+    }
+
+    #[test]
+    fn valid_service_token_yields_service_kind() {
+        let token = mint_service("django-gateway", "internal-rust", future(), Some("42"));
+        let ctx = validate_service_jwt(&token, &jwt_config(), &service_config())
+            .expect("valid service token");
+        assert_eq!(ctx.throttle_key(), "service:django");
+        match ctx.kind {
+            AuthKind::Service {
+                subject,
+                orig_subject,
+            } => {
+                assert_eq!(subject, "service:django");
+                assert_eq!(orig_subject.as_deref(), Some("42"));
+            }
+            other => panic!("expected Service kind, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn service_token_rejects_wrong_issuer_audience_and_expiry() {
+        let wrong_iss = mint_service("evil", "internal-rust", future(), None);
+        assert!(validate_service_jwt(&wrong_iss, &jwt_config(), &service_config()).is_err());
+
+        let wrong_aud = mint_service("django-gateway", "other-aud", future(), None);
+        assert!(validate_service_jwt(&wrong_aud, &jwt_config(), &service_config()).is_err());
+
+        let expired = mint_service("django-gateway", "internal-rust", past(), None);
+        assert!(validate_service_jwt(&expired, &jwt_config(), &service_config()).is_err());
+
+        let wrong_key = encode(
+            &Header::new(Algorithm::HS256),
+            &ServiceTestClaims {
+                sub: "service:django".to_string(),
+                iss: "django-gateway".to_string(),
+                aud: "internal-rust".to_string(),
+                exp: future(),
+                orig_sub: None,
+            },
+            &EncodingKey::from_secret(b"not-the-configured-key"),
+        )
+        .expect("token encodes");
+        assert!(validate_service_jwt(&wrong_key, &jwt_config(), &service_config()).is_err());
+    }
+
+    #[tokio::test]
+    async fn service_header_takes_precedence_over_client_credential() {
+        let service_token = mint_service("django-gateway", "internal-rust", future(), None);
+        let client_token = sign(&ClientTestClaims {
+            sub: "user-1".to_string(),
+            exp: future(),
+        });
+
+        let ctx = authenticate_request(
+            Some(&format!("Bearer {service_token}")),
+            Some(&format!("Bearer {client_token}")),
+            None,
+            &jwt_config(),
+            &service_config(),
+            None,
+        )
+        .await
+        .expect("authenticates");
+
+        assert!(matches!(ctx.kind, AuthKind::Service { .. }));
+    }
+
+    #[tokio::test]
+    async fn invalid_service_token_falls_back_to_client_credential() {
+        let bad_service_token = mint_service("wrong-issuer", "internal-rust", future(), None);
+        let client_token = sign(&ClientTestClaims {
+            sub: "user-1".to_string(),
+            exp: future(),
+        });
+
+        let ctx = authenticate_request(
+            Some(&format!("Bearer {bad_service_token}")),
+            Some(&format!("Bearer {client_token}")),
+            None,
+            &jwt_config(),
+            &service_config(),
+            None,
+        )
+        .await
+        .expect("falls back to client JWT");
+
+        assert!(matches!(
+            ctx.kind,
+            AuthKind::Jwt { ref subject } if subject == "user-1"
+        ));
+    }
+
+    #[tokio::test]
+    async fn no_credentials_at_all_is_missing() {
+        let err = authenticate_request(None, None, None, &jwt_config(), &service_config(), None)
+            .await
+            .expect_err("missing credentials");
+        assert!(matches!(err, AuthError::Missing));
+    }
+
+    async fn service_handler(req: Request<Body>) -> Response {
+        let seen = req
+            .extensions()
+            .get::<AuthContext>()
+            .map(|ctx| matches!(ctx.kind, AuthKind::Service { .. }))
+            .unwrap_or(false);
+        if seen {
+            StatusCode::OK.into_response()
+        } else {
+            StatusCode::IM_A_TEAPOT.into_response()
+        }
+    }
+
+    fn layering_app() -> Router {
+        let state = AuthState {
+            enabled: true,
+            jwt: Some(jwt_config()),
+            service: service_config(),
+            api_key_validator: None,
+        };
+        let throttle = ThrottleLayer::new(ThrottleState::new(ThrottleConfig {
+            enabled: true,
+            anon_rate: "100/min".to_string(),
+            user_rate: "1000/min".to_string(),
+            api_key_rate: "600/min".to_string(),
+            service_rate: "6000/min".to_string(),
+        }));
+        // Same order as services: auth outer, throttle inner.
+        Router::new().route("/", get(service_handler)).layer(
+            ServiceBuilder::new()
+                .layer(middleware::from_fn_with_state(state, auth_middleware))
+                .layer(throttle),
+        )
+    }
+
+    #[tokio::test]
+    async fn inner_throttle_layer_sees_auth_context_after_layer_swap() {
+        let token = mint_service("django-gateway", "internal-rust", future(), None);
+        let request = Request::builder()
+            .uri("/")
+            .header(SERVICE_AUTH_HEADER, format!("Bearer {token}"))
+            .body(Body::empty())
+            .expect("request builds");
+
+        let response = layering_app().oneshot(request).await.expect("served");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn unauthenticated_burst_never_hits_throttle_when_auth_is_outer() {
+        // With auth outer, every unauthenticated request is rejected with 401
+        // before the inner throttle layer counts it; with the old (buggy)
+        // order the anon bucket would return 429 from request #101.
+        let app = layering_app();
+        for i in 0..150 {
+            let request = Request::builder()
+                .uri("/")
+                .body(Body::empty())
+                .expect("request builds");
+            let response = app.clone().oneshot(request).await.expect("served");
+            assert_eq!(
+                response.status(),
+                StatusCode::UNAUTHORIZED,
+                "request {i} should 401, not be throttled"
+            );
+        }
+    }
 }

@@ -22,6 +22,7 @@ pub struct ThrottleConfig {
     pub anon_rate: String,
     pub user_rate: String,
     pub api_key_rate: String,
+    pub service_rate: String,
 }
 
 impl ThrottleConfig {
@@ -35,11 +36,14 @@ impl ThrottleConfig {
             std::env::var("THROTTLE_USER_RATE").unwrap_or_else(|_| "1000/min".to_string());
         let api_key_rate =
             std::env::var("API_KEY_THROTTLE_RATE").unwrap_or_else(|_| "10/min".to_string());
+        let service_rate =
+            std::env::var("THROTTLE_SERVICE_RATE").unwrap_or_else(|_| "6000/min".to_string());
         Self {
             enabled,
             anon_rate,
             user_rate,
             api_key_rate,
+            service_rate,
         }
     }
 }
@@ -49,6 +53,7 @@ pub struct ThrottleState {
     anon: RateLimiter<String, DashMapStateStore<String>, DefaultClock>,
     user: RateLimiter<String, DashMapStateStore<String>, DefaultClock>,
     api_key: RateLimiter<String, DashMapStateStore<String>, DefaultClock>,
+    service: RateLimiter<String, DashMapStateStore<String>, DefaultClock>,
 }
 
 impl ThrottleState {
@@ -61,11 +66,13 @@ impl ThrottleState {
         let anon = limiter_from_rate(&config.anon_rate);
         let user = limiter_from_rate(&config.user_rate);
         let api_key = limiter_from_rate(&config.api_key_rate);
+        let service = limiter_from_rate(&config.service_rate);
         Self {
             enabled: config.enabled,
             anon,
             user,
             api_key,
+            service,
         }
     }
 
@@ -77,6 +84,7 @@ impl ThrottleState {
             ThrottleKind::Anon => self.anon.check_key(&key.to_string()).is_ok(),
             ThrottleKind::User => self.user.check_key(&key.to_string()).is_ok(),
             ThrottleKind::ApiKey => self.api_key.check_key(&key.to_string()).is_ok(),
+            ThrottleKind::Service => self.service.check_key(&key.to_string()).is_ok(),
         }
     }
 }
@@ -153,6 +161,7 @@ enum ThrottleKind {
     Anon,
     User,
     ApiKey,
+    Service,
 }
 
 fn throttle_kind(auth: Option<&AuthContext>) -> ThrottleKind {
@@ -164,6 +173,10 @@ fn throttle_kind(auth: Option<&AuthContext>) -> ThrottleKind {
             kind: crate::AuthKind::ApiKey(_),
             ..
         }) => ThrottleKind::ApiKey,
+        Some(AuthContext {
+            kind: crate::AuthKind::Service { .. },
+            ..
+        }) => ThrottleKind::Service,
         None => ThrottleKind::Anon,
     }
 }
@@ -217,4 +230,79 @@ fn parse_quota(rate: &str) -> Option<Quota> {
 
 fn nonzero(value: u32) -> NonZeroU32 {
     NonZeroU32::new(value).unwrap_or_else(|| NonZeroU32::new(1).unwrap())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{AuthContext, AuthKind};
+
+    fn service_context() -> AuthContext {
+        AuthContext {
+            kind: AuthKind::Service {
+                subject: "service:django".to_string(),
+                orig_subject: None,
+            },
+        }
+    }
+
+    #[test]
+    fn service_auth_maps_to_service_bucket_and_key() {
+        let ctx = service_context();
+        assert!(matches!(throttle_kind(Some(&ctx)), ThrottleKind::Service));
+        let req: Request<()> = Request::builder().body(()).expect("request builds");
+        assert_eq!(throttle_key(&req, Some(&ctx)), "service:django");
+    }
+
+    #[test]
+    fn jwt_and_api_key_still_map_to_user_and_api_key_buckets() {
+        let jwt = AuthContext {
+            kind: AuthKind::Jwt {
+                subject: "u1".to_string(),
+            },
+        };
+        assert!(matches!(throttle_kind(Some(&jwt)), ThrottleKind::User));
+        assert_eq!(
+            throttle_key(&Request::builder().body(()).unwrap(), Some(&jwt)),
+            "user:u1"
+        );
+
+        let api_key = AuthContext {
+            kind: AuthKind::ApiKey(crate::auth::ApiKeyInfo {
+                key_id: "k1".to_string(),
+                user_id: 1,
+                scope: "read".to_string(),
+            }),
+        };
+        assert!(matches!(
+            throttle_kind(Some(&api_key)),
+            ThrottleKind::ApiKey
+        ));
+    }
+
+    #[test]
+    fn missing_auth_falls_back_to_client_ip_key() {
+        assert!(matches!(throttle_kind(None), ThrottleKind::Anon));
+        let req: Request<()> = Request::builder()
+            .header("x-forwarded-for", "203.0.113.7, 10.0.0.1")
+            .body(())
+            .expect("request builds");
+        assert_eq!(throttle_key(&req, None), "anon:203.0.113.7");
+    }
+
+    #[test]
+    fn service_rate_env_parses() {
+        let config = ThrottleConfig {
+            enabled: true,
+            anon_rate: "100/min".to_string(),
+            user_rate: "1000/min".to_string(),
+            api_key_rate: "10/min".to_string(),
+            service_rate: "6000/min".to_string(),
+        };
+        let state = ThrottleState::new(config);
+        // Generous bucket: must not trip within a small burst.
+        for _ in 0..50 {
+            assert!(state.check_key("service:django", ThrottleKind::Service));
+        }
+    }
 }
