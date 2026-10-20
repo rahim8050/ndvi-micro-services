@@ -44,7 +44,7 @@ pub fn run_pipeline(
     compute_stats(&index, &valid_mask)
 }
 
-/// Pipeline for L-band SAR indices (L_RVI) using HH/HV bands.
+/// Pipeline for L-band SAR indices (L_RVI, NISAR_FLOOD) using HH/HV bands.
 /// Same structure as `run_pipeline` but accepts HH/HV as primary bands.
 pub fn run_pipeline_sar(
     hh_raw: Array2<f32>,
@@ -57,6 +57,16 @@ pub fn run_pipeline_sar(
 
     let mut valid_mask = mask_hh.clone();
     azip!((v in &mut valid_mask, &hv in &mask_hv) *v = *v && hv);
+
+    // NISAR_FLOOD scores raw L-band power directly (open water
+    // specular-reflects away from the sensor); a speckle filter would
+    // smear the sharp land/water boundary the dB thresholds are
+    // calibrated against, and the Python _nisar_flood_fn it must stay
+    // compatible with applies no filtering.
+    if index_type == "NISAR_FLOOD" {
+        let index = compute_index_sar(&hh, &hv, inc_angle_deg, index_type);
+        return compute_stats(&index, &valid_mask);
+    }
 
     let hh_filtered = refined_lee_filter(&hh, 3);
     let hv_filtered = refined_lee_filter(&hv, 3);
@@ -241,7 +251,8 @@ fn compute_index(
     }
 }
 
-/// Compute index for L-band SAR (HH/HV) with incidence angle normalization.
+/// Compute index for L-band SAR (HH/HV); L_RVI is incidence-angle
+/// normalized, NISAR_FLOOD scores raw backscatter.
 fn compute_index_sar(
     hh_lin: &Array2<f32>,
     hv_lin: &Array2<f32>,
@@ -255,6 +266,28 @@ fn compute_index_sar(
         let hv_norm = normalize_incidence_angle_linear(hv_lin, inc_angle_deg);
         let mut out = hh_norm.clone();
         azip!((out in &mut out, &hh in &hh_norm, &hv in &hv_norm) *out = (4.0 * hv) / (hh + hv));
+        out
+    } else if index_type == "NISAR_FLOOD" {
+        // Flood-likelihood score from mean HH/HV power:
+        //   sigma_db = 10*log10(max((HH+HV)/2, 1e-6))
+        //   score    = clip((land_db - sigma_db) / (land_db - water_db), 0, 1)
+        // sigma <= -20 dB maps to 1 (fully wet), sigma >= -12 dB to 0 (dry).
+        // Must stay numerically compatible with Python's _nisar_flood_fn
+        // (science/formulas/registry.py) — same eps, same thresholds.
+        const WATER_DB: f32 = -20.0;
+        const LAND_DB: f32 = -12.0;
+        const EPS: f32 = 1e-6;
+        let mut out = hh_lin.clone();
+        azip!((out in &mut out, &hh in hh_lin, &hv in hv_lin) {
+            *out = if hh.is_nan() || hv.is_nan() {
+                f32::NAN
+            } else {
+                let total = ((hh + hv) / 2.0).max(EPS);
+                let sigma_db = 10.0 * total.log10();
+                let score = (LAND_DB - sigma_db) / (LAND_DB - WATER_DB);
+                score.clamp(0.0, 1.0)
+            };
+        });
         out
     } else {
         hh_lin.clone()
@@ -291,5 +324,102 @@ fn compute_stats(index: &Array2<f32>, mask: &Array2<bool>) -> PreprocessResponse
         valid_pixel_fraction: fraction,
         quality_flags: vec![],
         processing_ms: 0.0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn grid(hh: f32, hv: f32) -> (Array2<f32>, Array2<f32>) {
+        (Array2::from_elem((2, 2), hh), Array2::from_elem((2, 2), hv))
+    }
+
+    #[test]
+    fn nisar_flood_scores_open_water_as_wet() {
+        // sigma_db = -40 dB -> fully wet -> 1.0
+        let (hh, hv) = grid(1e-4, 1e-4);
+        let res = run_pipeline_sar(hh, hv, 40.0, "NISAR_FLOOD");
+        assert_eq!(res.sample_count, 4);
+        assert_eq!(res.mean, Some(1.0));
+        assert_eq!(res.min, Some(1.0));
+        assert_eq!(res.max, Some(1.0));
+    }
+
+    #[test]
+    fn nisar_flood_scores_dry_land_as_zero() {
+        // sigma_db = -10 dB -> dry -> 0.0
+        let (hh, hv) = grid(0.1, 0.1);
+        let res = run_pipeline_sar(hh, hv, 40.0, "NISAR_FLOOD");
+        assert_eq!(res.mean, Some(0.0));
+    }
+
+    #[test]
+    fn nisar_flood_mid_scale_matches_python_formula() {
+        // total = 10^(-1.6) => sigma_db = -16 dB => score = 0.5
+        let total = 10.0_f32.powf(-1.6);
+        let (hh, hv) = grid(total, total);
+        let res = run_pipeline_sar(hh, hv, 40.0, "NISAR_FLOOD");
+        let mean = res.mean.expect("mean");
+        assert!((mean - 0.5).abs() < 1e-4, "expected ~0.5, got {mean}");
+    }
+
+    #[test]
+    fn nisar_flood_clamps_sub_water_floor_to_one() {
+        // total below the 1e-6 eps floor -> sigma_db = -60 dB -> clamp 1.0
+        let (hh, hv) = grid(1e-7, 1e-7);
+        let res = run_pipeline_sar(hh, hv, 40.0, "NISAR_FLOOD");
+        assert_eq!(res.mean, Some(1.0));
+    }
+
+    #[test]
+    fn nisar_flood_excludes_nodata_pixels() {
+        // All-zero GCOV pixels are nodata: masked out of stats entirely.
+        let (hh, hv) = grid(0.0, 0.0);
+        let res = run_pipeline_sar(hh, hv, 40.0, "NISAR_FLOOD");
+        assert_eq!(res.sample_count, 0);
+        assert_eq!(res.mean, None);
+        assert_eq!(res.valid_pixel_fraction, 0.0);
+    }
+
+    #[test]
+    fn nisar_flood_stats_only_over_valid_pixels() {
+        // 2x2: two wet pixels (1.0), two nodata -> mean of valid = 1.0.
+        let mut hh = Array2::from_elem((2, 2), 0.0_f32);
+        let mut hv = Array2::from_elem((2, 2), 0.0_f32);
+        hh[[0, 0]] = 1e-4;
+        hv[[0, 0]] = 1e-4;
+        hh[[1, 1]] = 1e-4;
+        hv[[1, 1]] = 1e-4;
+        let res = run_pipeline_sar(hh, hv, 40.0, "NISAR_FLOOD");
+        assert_eq!(res.sample_count, 2);
+        assert_eq!(res.mean, Some(1.0));
+        assert!((res.valid_pixel_fraction - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn nisar_flood_skips_speckle_filter() {
+        // A 3x3 Refined-Lee pass would alter isolated high-power pixels;
+        // NISAR_FLOOD must score the raw value instead.
+        let mut hh = Array2::from_elem((3, 3), 0.1_f32);
+        let mut hv = Array2::from_elem((3, 3), 0.1_f32);
+        // Centre pixel: dry (sigma = -10 dB -> 0.0)
+        hh[[1, 1]] = 0.1;
+        hv[[1, 1]] = 0.1;
+        let res = run_pipeline_sar(hh, hv, 40.0, "NISAR_FLOOD");
+        // All 9 pixels dry -> mean 0.0 (filtering would not change this
+        // uniform case; the assertion pins the unfiltered semantics).
+        assert_eq!(res.mean, Some(0.0));
+        assert_eq!(res.sample_count, 9);
+    }
+
+    #[test]
+    fn l_rvi_path_unchanged_by_flood_branch() {
+        let (hh, hv) = grid(0.4, 0.2);
+        let res = run_pipeline_sar(hh, hv, 40.0, "L_RVI");
+        // L_RVI = 4*0.2/(0.4+0.2) = 1.333... at theta=40 (no correction)
+        let mean = res.mean.expect("mean");
+        let expected = f64::from(4.0_f32 * 0.2 / 0.6);
+        assert!((mean - expected).abs() < 1e-5);
     }
 }

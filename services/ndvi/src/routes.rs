@@ -197,13 +197,20 @@ async fn compute(Json(payload): Json<ComputeRequest>) -> Response {
     let beta = payload.beta.unwrap_or(-0.30);
     let gamma = payload.gamma.unwrap_or(0.50);
 
-    let compute_task = if payload.index_type == "L_RVI" {
+    // L-band indices (HH/HV from NISAR GCOV) vs C-band (VV/VH).
+    let is_lband = matches!(payload.index_type.as_str(), "L_RVI" | "NISAR_FLOOD");
+    let compute_task = if is_lband {
         let hh = match payload.hh {
             Some(hh) => hh,
             None => {
                 let body = Envelope::failure(
                     "Missing bands",
-                    Some(json!({"detail": "L_RVI requires hh and hv arrays"})),
+                    Some(json!({
+                        "detail": format!(
+                            "{} requires hh and hv arrays",
+                            payload.index_type
+                        )
+                    })),
                 );
                 return (StatusCode::BAD_REQUEST, Json(body)).into_response();
             }
@@ -213,7 +220,12 @@ async fn compute(Json(payload): Json<ComputeRequest>) -> Response {
             None => {
                 let body = Envelope::failure(
                     "Missing bands",
-                    Some(json!({"detail": "L_RVI requires hh and hv arrays"})),
+                    Some(json!({
+                        "detail": format!(
+                            "{} requires hh and hv arrays",
+                            payload.index_type
+                        )
+                    })),
                 );
                 return (StatusCode::BAD_REQUEST, Json(body)).into_response();
             }
