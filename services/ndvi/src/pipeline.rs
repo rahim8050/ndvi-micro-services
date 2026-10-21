@@ -72,7 +72,7 @@ pub fn run_pipeline_sar(
     let hv_filtered = refined_lee_filter(&hv, 3);
 
     let angle = if (inc_angle_deg - 40.0).abs() < 0.01 {
-        estimate_incidence_angle_deg(&hh_filtered, &hv_filtered)
+        estimate_incidence_angle_deg_lband(&hh_filtered, &hv_filtered)
     } else {
         inc_angle_deg
     };
@@ -98,6 +98,32 @@ fn linear_to_db(arr: &Array2<f32>) -> Array2<f32> {
     })
 }
 
+/// Mean (VV or HH) dB minus mean (VH or HV) dB over pixels where both
+/// bands are valid.  Returns `None` when fewer than 100 valid pairs exist.
+fn mean_db_ratio(primary: &Array2<f32>, cross: &Array2<f32>) -> Option<f32> {
+    let mut primary_db_sum = 0.0_f32;
+    let mut cross_db_sum = 0.0_f32;
+    let mut count = 0_u64;
+
+    azip!((&p in primary, &c in cross) {
+        if p > 1e-10 && c > 1e-10 {
+            primary_db_sum += 10.0 * p.log10();
+            cross_db_sum += 10.0 * c.log10();
+            count += 1;
+        }
+    });
+
+    if count < 100 {
+        None
+    } else {
+        Some((primary_db_sum / count as f32) - (cross_db_sum / count as f32))
+    }
+}
+
+fn theta_from_ratio(ratio_db: f32, ref_db: f32, slope: f32) -> f32 {
+    (35.0 + (ratio_db - ref_db) / slope).clamp(29.0, 46.0)
+}
+
 /// Estimate the scene-average local incidence angle (degrees) from VV/VH backscatter.
 ///
 /// When the Planetary Computer STAC item has no `local_incidence_angle` asset,
@@ -107,27 +133,30 @@ fn linear_to_db(arr: &Array2<f32>) -> Array2<f32> {
 ///   VV/VH(dB) ≈ 1.5 + 0.075 * (θ - 35)
 ///   => θ ≈ 35 + (VV/VH_dB - 1.5) / 0.075
 ///
+/// Falls back to 40.0° when fewer than 100 valid pairs exist.
 /// Clamps result to [29.0, 46.0] (Sentinel-1 IW GRD incidence angle range).
+/// Kept in lockstep with Python's `_estimate_cband_incidence_angle_deg`.
 pub fn estimate_incidence_angle_deg(vv: &Array2<f32>, vh: &Array2<f32>) -> f32 {
-    let mut vv_db_sum = 0.0_f32;
-    let mut vh_db_sum = 0.0_f32;
-    let mut count = 0_u64;
-
-    azip!((&v in vv, &h in vh) {
-        if v > 1e-10 && h > 1e-10 {
-            vv_db_sum += 10.0 * v.log10();
-            vh_db_sum += 10.0 * h.log10();
-            count += 1;
-        }
-    });
-
-    if count < 100 {
-        return 40.0;
+    match mean_db_ratio(vv, vh) {
+        Some(ratio_db) => theta_from_ratio(ratio_db, 1.5, 0.075),
+        None => 40.0,
     }
+}
 
-    let vv_vh_db = (vv_db_sum / count as f32) - (vh_db_sum / count as f32);
-    let theta = 35.0 + (vv_vh_db - 1.5) / 0.075;
-    theta.clamp(29.0, 46.0)
+/// Estimate the scene-average local incidence angle from HH/HV backscatter.
+///
+/// Empirical relationship for NISAR L-band SAR over vegetation:
+///   HH/HV(dB) ≈ 2.5 + 0.07 * (θ - 35)
+///   => θ ≈ 35 + (HH/HV_dB - 2.5) / 0.07
+///
+/// Falls back to 40.0° when fewer than 100 valid pairs exist.
+/// Clamps result to [29.0, 46.0].
+/// Kept in lockstep with Python's `_estimate_lband_incidence_angle_deg`.
+pub fn estimate_incidence_angle_deg_lband(hh: &Array2<f32>, hv: &Array2<f32>) -> f32 {
+    match mean_db_ratio(hh, hv) {
+        Some(ratio_db) => theta_from_ratio(ratio_db, 2.5, 0.07),
+        None => 40.0,
+    }
 }
 
 /// Normalize linear backscatter for incidence angle.
@@ -144,12 +173,13 @@ fn normalize_incidence_angle_linear(arr: &Array2<f32>, theta_local_deg: f32) -> 
 
 /// Normalize dB backscatter for incidence angle.
 ///
-/// `σ_dB_norm = σ_dB + 10*log10(cos(θ_ref)/cos(θ_local))` — the dB
-/// equivalent of `normalize_incidence_angle_linear`.
+/// `σ_dB_norm = σ_dB + 10*log10(cos(θ_local)/cos(θ_ref))` — the dB
+/// equivalent of `normalize_incidence_angle_linear`
+/// (`10*log10(σ * cos(θ_local)/cos(θ_ref))`).
 fn normalize_incidence_angle(db_arr: &Array2<f32>, theta_local_deg: f32) -> Array2<f32> {
     let theta_ref_rad = 40.0_f32.to_radians();
     let theta_local_rad = theta_local_deg.to_radians();
-    let correction = theta_ref_rad.cos() / theta_local_rad.cos();
+    let correction = theta_local_rad.cos() / theta_ref_rad.cos();
 
     db_arr.mapv(|v| {
         if v.is_nan() {
@@ -421,5 +451,75 @@ mod tests {
         let mean = res.mean.expect("mean");
         let expected = f64::from(4.0_f32 * 0.2 / 0.6);
         assert!((mean - expected).abs() < 1e-5);
+    }
+
+    #[test]
+    fn cband_estimator_known_ratio_is_40_deg() {
+        // VV/VH = 1.875 dB => theta = 35 + (1.875 - 1.5) / 0.075 = 40
+        let vv = Array2::from_elem((11, 11), 0.5_f32);
+        let vh = Array2::from_elem((11, 11), 0.5_f32 / 10.0_f32.powf(0.1875_f32));
+        let theta = estimate_incidence_angle_deg(&vv, &vh);
+        assert!((theta - 40.0).abs() < 1e-3, "expected ~40, got {theta}");
+    }
+
+    #[test]
+    fn cband_estimator_clamps_and_falls_back() {
+        let vv = Array2::from_elem((11, 11), 1.0_f32);
+        let vh_wet = Array2::from_elem((11, 11), 1.0_f32 / 10.0_f32.powf(1.2_f32));
+        let vh_dry = Array2::from_elem((11, 11), 10.0_f32.powf(0.6_f32));
+        assert_eq!(estimate_incidence_angle_deg(&vv, &vh_wet), 46.0);
+        assert_eq!(estimate_incidence_angle_deg(&vv, &vh_dry), 29.0);
+        // Fewer than 100 valid pairs -> 40.0 fallback
+        let vv_small = Array2::from_elem((5, 5), 0.5_f32);
+        let vh_small = Array2::from_elem((5, 5), 0.2_f32);
+        assert_eq!(estimate_incidence_angle_deg(&vv_small, &vh_small), 40.0);
+    }
+
+    #[test]
+    fn lband_estimator_known_ratio_is_45_deg() {
+        // HH/HV = 3.2 dB => theta = 35 + (3.2 - 2.5) / 0.07 = 45
+        // (the C-band relation would give ~54.3 on this ratio)
+        let hh = Array2::from_elem((11, 11), 0.25_f32);
+        let hv = Array2::from_elem((11, 11), 0.25_f32 / 10.0_f32.powf(0.32_f32));
+        let theta = estimate_incidence_angle_deg_lband(&hh, &hv);
+        assert!((theta - 45.0).abs() < 1e-3, "expected ~45, got {theta}");
+        let hh_small = Array2::from_elem((5, 5), 0.25_f32);
+        let hv_small = Array2::from_elem((5, 5), 0.05_f32);
+        assert_eq!(
+            estimate_incidence_angle_deg_lband(&hh_small, &hv_small),
+            40.0
+        );
+    }
+
+    #[test]
+    fn db_normalization_matches_linear_normalization() {
+        // 10*log10(sigma * cos(t)/cos(40)) must equal
+        // 10*log10(sigma) + 10*log10(cos(t)/cos(40)) — guards the sign.
+        let lin = Array2::from_elem((3, 3), 0.25_f32);
+        let via_linear = normalize_incidence_angle_linear(&lin, 33.0);
+        let via_db = normalize_incidence_angle(&linear_to_db(&lin), 33.0);
+        azip!((&l in &via_linear, &d in &via_db) {
+            let expected = 10.0 * l.log10();
+            assert!((d - expected).abs() < 1e-4, "db={d} expected={expected}");
+        });
+    }
+
+    #[test]
+    fn s1_smi_matches_python_formula_with_normalization() {
+        // Python _s1_smi_fn: normalize linear bands by cos(t)/cos(40),
+        // convert to dB, then SMI = alpha*vv_db + beta*vh_db + gamma.
+        let vv = Array2::from_elem((2, 2), 0.5_f32);
+        let vh = Array2::from_elem((2, 2), 0.2_f32);
+        let theta = 33.0_f32;
+        let out = compute_index(&vv, &vh, theta, "S1_SMI", 0.5, -0.1, -10.0);
+        let c = theta.to_radians().cos() / 40.0_f32.to_radians().cos();
+        let vv_db = 10.0 * (0.5_f32 * c).log10();
+        let vh_db = 10.0 * (0.2_f32 * c).log10();
+        let expected = f64::from(0.5 * vv_db + (-0.1) * vh_db - 10.0);
+        let m = out[[0, 0]];
+        assert!(
+            (f64::from(m) - expected).abs() < 1e-4,
+            "got {m} expected {expected}"
+        );
     }
 }
