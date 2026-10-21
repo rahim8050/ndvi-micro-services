@@ -522,4 +522,71 @@ mod tests {
             "got {m} expected {expected}"
         );
     }
+
+    #[test]
+    fn lee_filter_uniform_input_is_unchanged() {
+        let arr = Array2::from_elem((5, 5), 0.3_f32);
+        let out = refined_lee_filter(&arr, 3);
+        // Interior passes through the mean, which may differ from the
+        // input by ~1 ulp after f32 window-sum division.
+        for (o, a) in out.iter().zip(arr.iter()) {
+            assert!((o - a).abs() <= 1e-6, "out={o} in={a}");
+        }
+    }
+
+    #[test]
+    fn lee_filter_preserves_borders_and_nodata_centers() {
+        let mut arr = Array2::from_elem((7, 7), 0.2_f32);
+        arr[[3, 3]] = f32::NAN;
+        arr[[0, 0]] = 1.0; // border row must stay untouched
+        let out = refined_lee_filter(&arr, 3);
+        assert_eq!(out[[0, 0]], 1.0);
+        assert!(out[[3, 3]].is_nan());
+        assert_eq!(out[[0, 3]], arr[[0, 3]]);
+        assert_eq!(out[[6, 6]], arr[[6, 6]]);
+        assert_eq!(out[[3, 0]], arr[[3, 0]]);
+    }
+
+    #[test]
+    fn lee_filter_reduces_checkerboard_variance() {
+        let arr = Array2::from_shape_fn(
+            (9, 9),
+            |(i, j)| {
+                if (i + j) % 2 == 0 {
+                    0.1_f32
+                } else {
+                    0.5_f32
+                }
+            },
+        );
+        let out = refined_lee_filter(&arr, 3);
+        let mut sum_in = 0.0_f32;
+        let mut sum_out = 0.0_f32;
+        let mut n = 0.0_f32;
+        for i in 1..8 {
+            for j in 1..8 {
+                sum_in += arr[[i, j]];
+                sum_out += out[[i, j]];
+                n += 1.0;
+            }
+        }
+        let mean_in = sum_in / n;
+        let mean_out = sum_out / n;
+        let mut var_in = 0.0_f32;
+        let mut var_out = 0.0_f32;
+        for i in 1..8 {
+            for j in 1..8 {
+                var_in += (arr[[i, j]] - mean_in).powi(2);
+                var_out += (out[[i, j]] - mean_out).powi(2);
+            }
+        }
+        var_in /= n;
+        var_out /= n;
+        // Lee weight on a checkerboard is ~0.8, so variance shrinks to
+        // roughly w^2 (~0.7) of the input.
+        assert!(
+            var_out < var_in * 0.85,
+            "expected variance reduction, in={var_in} out={var_out}"
+        );
+    }
 }
