@@ -298,21 +298,24 @@ fn compute_index_sar(
         azip!((out in &mut out, &hh in &hh_norm, &hv in &hv_norm) *out = (4.0 * hv) / (hh + hv));
         out
     } else if index_type == "NISAR_FLOOD" {
-        // Flood-likelihood score from mean HH/HV power:
-        //   sigma_db = 10*log10(max((HH+HV)/2, 1e-6))
+        // Flood-likelihood score from HH co-pol power:
+        //   sigma_db = 10*log10(max(HH, 1e-6))
         //   score    = clip((land_db - sigma_db) / (land_db - water_db), 0, 1)
         // sigma <= -20 dB maps to 1 (fully wet), sigma >= -12 dB to 0 (dry).
+        // HH-only: HH maximizes the water/land contrast at L-band; HV is
+        // dark over water *and* much of the land, so averaging it in would
+        // drag dry pixels toward the water threshold (hv is ignored here).
         // Must stay numerically compatible with Python's _nisar_flood_fn
         // (science/formulas/registry.py) — same eps, same thresholds.
         const WATER_DB: f32 = -20.0;
         const LAND_DB: f32 = -12.0;
         const EPS: f32 = 1e-6;
         let mut out = hh_lin.clone();
-        azip!((out in &mut out, &hh in hh_lin, &hv in hv_lin) {
-            *out = if hh.is_nan() || hv.is_nan() {
+        azip!((out in &mut out, &hh in hh_lin) {
+            *out = if hh.is_nan() {
                 f32::NAN
             } else {
-                let total = ((hh + hv) / 2.0).max(EPS);
+                let total = hh.max(EPS);
                 let sigma_db = 10.0 * total.log10();
                 let score = (LAND_DB - sigma_db) / (LAND_DB - WATER_DB);
                 score.clamp(0.0, 1.0)
@@ -441,6 +444,20 @@ mod tests {
         // uniform case; the assertion pins the unfiltered semantics).
         assert_eq!(res.mean, Some(0.0));
         assert_eq!(res.sample_count, 9);
+    }
+
+    #[test]
+    fn nisar_flood_scores_from_hh_only() {
+        // Bright HH (dry edge, -12 dB) with water-dark HV (-50 dB):
+        // HH-only -> ~0.0; mean(HH,HV) would score ~0.375 (wet-biased).
+        let (hh, hv) = grid(10.0_f32.powf(-1.2), 1e-5);
+        let res = run_pipeline_sar(hh, hv, 40.0, "NISAR_FLOOD");
+        let mean = res.mean.expect("mean");
+        assert!(mean.abs() < 1e-5, "expected ~0.0, got {mean}");
+        // Water-dark HH with bright HV must still score fully wet.
+        let (hh, hv) = grid(1e-5, 10.0_f32.powf(-0.8));
+        let res = run_pipeline_sar(hh, hv, 40.0, "NISAR_FLOOD");
+        assert_eq!(res.mean, Some(1.0));
     }
 
     #[test]
