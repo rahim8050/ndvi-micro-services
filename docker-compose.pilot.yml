@@ -51,6 +51,12 @@ services:
     depends_on:
       ndvi-db:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bash", "-c", 'exec 3<>/dev/tcp/127.0.0.1/${NDVI_PORT} && printf "GET /healthz HTTP/1.0\r\n\r\n" >&3 && head -n1 <&3 | grep -qE "^HTTP/[0-9.]+ 200"']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
     restart: unless-stopped
 
   weather-service:
@@ -69,6 +75,12 @@ services:
     depends_on:
       weather-db:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bash", "-c", 'exec 3<>/dev/tcp/127.0.0.1/8090 && printf "GET /healthz HTTP/1.0\r\n\r\n" >&3 && head -n1 <&3 | grep -qE "^HTTP/[0-9.]+ 200"']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
     restart: unless-stopped
 
 volumes:
