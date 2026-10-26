@@ -41,7 +41,7 @@ All endpoints return a consistent envelope:
 
 - `POST /api/v1/ndvi` – ingest NDVI sample (201 Created)
 - `POST /api/v1/preprocess` – calculate RVI and S1_SMI from Sentinel-1 SAR COGs (fetches COG URLs internally; currently returns dummy data until COG reader is implemented)
-- `POST /api/v1/compute` – calculate RVI or S1_SMI from raw VV/VH pixel arrays (used by Django `RustSarEngine` as the primary integration path)
+- `POST /api/v1/compute` – calculate an index from raw pixel arrays (used by Django `RustSarEngine` as the primary integration path): `RVI` / `S1_SMI` from VV/VH, `L_RVI` / `NISAR_FLOOD` from HH/HV (send `hh`/`hv` and `vv`/`vh: []` for L-band)
 - `GET /api/v1/` – API discovery
 - `GET /healthz` – liveness
 - `GET /metrics` – Prometheus metrics
@@ -59,7 +59,7 @@ All endpoints return a consistent envelope:
 }
 ```
 
-Response contains mean/min/max/sample_count/valid_pixel_fraction after applying Refined Lee speckle filter, dB conversion (S1_SMI only), and index formula.
+Response contains mean/min/max/sample_count/valid_pixel_fraction. SAR indices (`RVI`, `S1_SMI`, `L_RVI`, `NISAR_FLOOD`) run the shared preprocessing chain first — nodata mask (≤ 1e-10 → NaN) → 3×3 Refined-Lee speckle filter → incidence-angle resolution (the provided `inc_angle_deg` when set, otherwise estimated from the VV/VH or HH/HV ratio) → `cos θ_local / cos 40°` RTC normalization — then the index formula (dB conversion for `S1_SMI`, flood-threshold scoring on RTC-normalized HH for `NISAR_FLOOD`, ratios otherwise). `NISAR_FLOOD` enforces Lee + RTC even where open water is specular to the radar; the RTC scale is a bounded positive factor (≈0.91–1.14), so specular-dark water stays below the −20 dB water floor.
 
 ### Weather
 

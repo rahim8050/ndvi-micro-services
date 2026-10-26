@@ -58,16 +58,13 @@ pub fn run_pipeline_sar(
     let mut valid_mask = mask_hh.clone();
     azip!((v in &mut valid_mask, &hv in &mask_hv) *v = *v && hv);
 
-    // NISAR_FLOOD scores raw L-band power directly (open water
-    // specular-reflects away from the sensor); a speckle filter would
-    // smear the sharp land/water boundary the dB thresholds are
-    // calibrated against, and the Python _nisar_flood_fn it must stay
-    // compatible with applies no filtering.
-    if index_type == "NISAR_FLOOD" {
-        let index = compute_index_sar(&hh, &hv, inc_angle_deg, index_type);
-        return compute_stats(&index, &valid_mask);
-    }
-
+    // Every L-band index (L_RVI and NISAR_FLOOD) runs the shared
+    // chain: nodata mask -> 3x3 Refined-Lee speckle filter ->
+    // incidence-angle resolution -> RTC normalization inside
+    // compute_index_sar.  NISAR_FLOOD deliberately stays in this
+    // chain — the flood thresholds score filtered, RTC-normalized
+    // HH even where water is specular to the radar (kept in
+    // lockstep with Python's _nisar_flood_fn).
     let hh_filtered = refined_lee_filter(&hh, 3);
     let hv_filtered = refined_lee_filter(&hv, 3);
 
@@ -228,7 +225,8 @@ pub fn refined_lee_filter(arr: &Array2<f32>, kernel_size: u32) -> Array2<f32> {
                     let mean = sum / count;
                     let variance = (sum_sq / count) - (mean * mean);
 
-                    // Lee filter weight: w = var / (mean^2 * sigma_v^2 + var)
+                    // Lee filter weight: w = (var - var_v) / var,
+                    // clamped at 0 when the window is speckle-level
                     let sigma_v = 0.26; // Approx for Sentinel-1 GRD 3-look
                     let var_v = mean * mean * sigma_v * sigma_v;
                     let w = if variance > var_v {
@@ -281,8 +279,9 @@ fn compute_index(
     }
 }
 
-/// Compute index for L-band SAR (HH/HV); L_RVI is incidence-angle
-/// normalized, NISAR_FLOOD scores raw backscatter.
+/// Compute index for L-band SAR (HH/HV).  L_RVI and NISAR_FLOOD are
+/// incidence-angle normalized — flood scores the RTC-normalized HH
+/// after the caller's 3x3 Refined-Lee speckle filter.
 fn compute_index_sar(
     hh_lin: &Array2<f32>,
     hv_lin: &Array2<f32>,
@@ -298,20 +297,29 @@ fn compute_index_sar(
         azip!((out in &mut out, &hh in &hh_norm, &hv in &hv_norm) *out = (4.0 * hv) / (hh + hv));
         out
     } else if index_type == "NISAR_FLOOD" {
-        // Flood-likelihood score from HH co-pol power:
-        //   sigma_db = 10*log10(max(HH, 1e-6))
+        // Flood-likelihood score from HH co-pol power after RTC:
+        //   hh_rtc  = HH * cos(theta_local) / cos(40 deg)
+        //   sigma_db = 10*log10(max(hh_rtc, 1e-6))
         //   score    = clip((land_db - sigma_db) / (land_db - water_db), 0, 1)
         // sigma <= -20 dB maps to 1 (fully wet), sigma >= -12 dB to 0 (dry).
         // HH-only: HH maximizes the water/land contrast at L-band; HV is
         // dark over water *and* much of the land, so averaging it in would
         // drag dry pixels toward the water threshold (hv is ignored here).
+        // The caller already applied the 3x3 Refined-Lee speckle filter;
+        // the RTC scale here is applied even where open water is
+        // specular to the radar — it is a bounded positive factor
+        // (cos theta / cos 40 deg within [29 deg, 46 deg] -> ~0.91..1.14),
+        // so specular-dark pixels stay on the wet side of the -20 dB
+        // floor and flood scores remain comparable across the swath.
         // Must stay numerically compatible with Python's _nisar_flood_fn
-        // (science/formulas/registry.py) — same eps, same thresholds.
+        // (science/formulas/registry.py) — same order (mask -> Lee ->
+        // RTC -> score), same eps, same thresholds.
         const WATER_DB: f32 = -20.0;
         const LAND_DB: f32 = -12.0;
         const EPS: f32 = 1e-6;
-        let mut out = hh_lin.clone();
-        azip!((out in &mut out, &hh in hh_lin) {
+        let hh_norm = normalize_incidence_angle_linear(hh_lin, inc_angle_deg);
+        let mut out = hh_norm.clone();
+        azip!((out in &mut out, &hh in &hh_norm) {
             *out = if hh.is_nan() {
                 f32::NAN
             } else {
@@ -431,19 +439,56 @@ mod tests {
     }
 
     #[test]
-    fn nisar_flood_skips_speckle_filter() {
-        // A 3x3 Refined-Lee pass would alter isolated high-power pixels;
-        // NISAR_FLOOD must score the raw value instead.
-        let mut hh = Array2::from_elem((3, 3), 0.1_f32);
-        let mut hv = Array2::from_elem((3, 3), 0.1_f32);
-        // Centre pixel: dry (sigma = -10 dB -> 0.0)
-        hh[[1, 1]] = 0.1;
-        hv[[1, 1]] = 0.1;
+    fn nisar_flood_applies_speckle_filter() {
+        // 3x3 scene: wet borders (0.01 = -20 dB -> score 1.0) around a
+        // drier centre (0.03).  The centre is the only interior pixel,
+        // so the 3x3 Refined-Lee pass smooths it toward the window mean:
+        //   mean    = (8*0.01 + 0.03) / 9      = 0.0122222
+        //   var     = sum_sq/9 - mean^2        = 3.95062e-5
+        //   var_v   = mean^2 * 0.26^2          = 1.00983e-5
+        //   w       = (var - var_v) / var      = 0.744392
+        //   centre  = mean + w*(0.03 - mean)   = 0.0254559 -> -15.94 dB
+        //   score   = (-12 - -15.94) / 8       = 0.49279 (raw: 0.40360)
+        // mean = (8*1.0 + 0.49279) / 9 = 0.94364; unfiltered: 0.93373.
+        // 9 valid pairs (<100) keep the angle estimate at the 40 deg
+        // fallback, so RTC is a no-op here and only Lee is exercised.
+        let mut hh = Array2::from_elem((3, 3), 0.01_f32);
+        let mut hv = Array2::from_elem((3, 3), 0.01_f32);
+        hh[[1, 1]] = 0.03;
+        hv[[1, 1]] = 0.03;
         let res = run_pipeline_sar(hh, hv, 40.0, "NISAR_FLOOD");
-        // All 9 pixels dry -> mean 0.0 (filtering would not change this
-        // uniform case; the assertion pins the unfiltered semantics).
-        assert_eq!(res.mean, Some(0.0));
+        let mean = res.mean.expect("mean");
+        assert!(
+            (mean - 0.94364).abs() < 2e-3,
+            "expected ~0.94364 (Lee applied), got {mean}"
+        );
+        assert!(
+            mean > 0.938,
+            "unfiltered centre would score mean 0.93373, got {mean}"
+        );
         assert_eq!(res.sample_count, 9);
+    }
+
+    #[test]
+    fn nisar_flood_applies_rtc_normalization() {
+        // A real (non-fallback) angle must scale HH by
+        // cos(theta)/cos(40) before the dB thresholds: raw -16 dB
+        // would score exactly 0.5, RTC-normalized scores lower.
+        let total = 10.0_f32.powf(-1.6);
+        let (hh, hv) = grid(total, total);
+        let res = run_pipeline_sar(hh, hv, 33.0, "NISAR_FLOOD");
+        let c = 33.0_f32.to_radians().cos() / 40.0_f32.to_radians().cos();
+        let sigma_db = 10.0 * (total * c).log10();
+        let expected = f64::from((-12.0_f32 - sigma_db) / 8.0).clamp(0.0, 1.0);
+        let mean = res.mean.expect("mean");
+        assert!(
+            (mean - expected).abs() < 1e-3,
+            "got {mean} expected {expected}"
+        );
+        assert!(
+            (mean - 0.5).abs() > 0.03,
+            "RTC must shift the score away from raw 0.5, got {mean}"
+        );
     }
 
     #[test]
