@@ -165,6 +165,7 @@ async fn preprocess(Json(payload): Json<PreprocessRequest>) -> Response {
             alpha,
             beta,
             gamma,
+            None,
         )
     })
     .await
@@ -191,6 +192,38 @@ async fn preprocess(Json(payload): Json<PreprocessRequest>) -> Response {
 async fn compute(Json(payload): Json<ComputeRequest>) -> Response {
     let start = std::time::Instant::now();
     let expected_len = payload.width * payload.height;
+
+    // Optional farm-polygon mask (True = inside). Validate length up
+    // front and materialize as a row-major Array2; absence keeps the
+    // legacy whole-bbox behaviour.
+    let geometry_mask = payload.mask;
+    if let Some(ref m) = geometry_mask {
+        if m.len() != expected_len {
+            let body = Envelope::failure(
+                "Invalid input dimensions",
+                Some(json!({
+                    "detail": format!(
+                        "expected {} elements for mask, got {}",
+                        expected_len,
+                        m.len()
+                    )
+                })),
+            );
+            return (StatusCode::BAD_REQUEST, Json(body)).into_response();
+        }
+    }
+    let mask_arr = match geometry_mask {
+        Some(m) => match Array2::from_shape_vec((payload.height, payload.width), m) {
+            Ok(arr) => Some(arr),
+            Err(err) => {
+                let body =
+                    Envelope::failure("Shape error", Some(json!({"detail": err.to_string()})));
+                return (StatusCode::BAD_REQUEST, Json(body)).into_response();
+            }
+        },
+        None => None,
+    };
+
     let inc_angle_deg = payload.inc_angle_deg.unwrap_or(40.0);
     let index_type = payload.index_type.clone();
     let alpha = payload.alpha.unwrap_or(0.70);
@@ -259,7 +292,7 @@ async fn compute(Json(payload): Json<ComputeRequest>) -> Response {
             }
         };
         tokio::task::spawn_blocking(move || {
-            run_pipeline_sar(hh_raw, hv_raw, inc_angle_deg, &index_type)
+            run_pipeline_sar(hh_raw, hv_raw, inc_angle_deg, &index_type, mask_arr)
         })
     } else {
         if payload.vv.len() != expected_len || payload.vh.len() != expected_len {
@@ -301,6 +334,7 @@ async fn compute(Json(payload): Json<ComputeRequest>) -> Response {
                 alpha,
                 beta,
                 gamma,
+                mask_arr,
             )
         })
     };

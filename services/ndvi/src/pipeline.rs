@@ -2,6 +2,7 @@ use crate::models::PreprocessResponse;
 use ndarray::{azip, Array2};
 use rayon::prelude::*;
 
+#[allow(clippy::too_many_arguments)] // bands + index + calibration + mask
 pub fn run_pipeline(
     vv_raw: Array2<f32>,
     vh_raw: Array2<f32>,
@@ -10,6 +11,7 @@ pub fn run_pipeline(
     alpha: f32,
     beta: f32,
     gamma: f32,
+    geometry_mask: Option<Array2<bool>>,
 ) -> PreprocessResponse {
     let (vv, mask_vv) = mask_nodata(&vv_raw);
     let (vh, mask_vh) = mask_nodata(&vh_raw);
@@ -17,6 +19,9 @@ pub fn run_pipeline(
     // Pixel-wise AND of masks
     let mut valid_mask = mask_vv.clone();
     azip!((v in &mut valid_mask, &vh in &mask_vh) *v = *v && vh);
+    if let Some(ref gm) = geometry_mask {
+        azip!((v in &mut valid_mask, &m in gm) *v = *v && m);
+    }
 
     // Apply speckle filter on linear backscatter
     let vv_filtered = refined_lee_filter(&vv, 3);
@@ -51,12 +56,16 @@ pub fn run_pipeline_sar(
     hv_raw: Array2<f32>,
     inc_angle_deg: f32,
     index_type: &str,
+    geometry_mask: Option<Array2<bool>>,
 ) -> PreprocessResponse {
     let (hh, mask_hh) = mask_nodata(&hh_raw);
     let (hv, mask_hv) = mask_nodata(&hv_raw);
 
     let mut valid_mask = mask_hh.clone();
     azip!((v in &mut valid_mask, &hv in &mask_hv) *v = *v && hv);
+    if let Some(ref gm) = geometry_mask {
+        azip!((v in &mut valid_mask, &m in gm) *v = *v && m);
+    }
 
     // Every L-band index (L_RVI and NISAR_FLOOD) runs the shared
     // chain: nodata mask -> 3x3 Refined-Lee speckle filter ->
@@ -380,7 +389,7 @@ mod tests {
     fn nisar_flood_scores_open_water_as_wet() {
         // sigma_db = -40 dB -> fully wet -> 1.0
         let (hh, hv) = grid(1e-4, 1e-4);
-        let res = run_pipeline_sar(hh, hv, 40.0, "NISAR_FLOOD");
+        let res = run_pipeline_sar(hh, hv, 40.0, "NISAR_FLOOD", None);
         assert_eq!(res.sample_count, 4);
         assert_eq!(res.mean, Some(1.0));
         assert_eq!(res.min, Some(1.0));
@@ -391,7 +400,7 @@ mod tests {
     fn nisar_flood_scores_dry_land_as_zero() {
         // sigma_db = -10 dB -> dry -> 0.0
         let (hh, hv) = grid(0.1, 0.1);
-        let res = run_pipeline_sar(hh, hv, 40.0, "NISAR_FLOOD");
+        let res = run_pipeline_sar(hh, hv, 40.0, "NISAR_FLOOD", None);
         assert_eq!(res.mean, Some(0.0));
     }
 
@@ -400,7 +409,7 @@ mod tests {
         // total = 10^(-1.6) => sigma_db = -16 dB => score = 0.5
         let total = 10.0_f32.powf(-1.6);
         let (hh, hv) = grid(total, total);
-        let res = run_pipeline_sar(hh, hv, 40.0, "NISAR_FLOOD");
+        let res = run_pipeline_sar(hh, hv, 40.0, "NISAR_FLOOD", None);
         let mean = res.mean.expect("mean");
         assert!((mean - 0.5).abs() < 1e-4, "expected ~0.5, got {mean}");
     }
@@ -409,7 +418,7 @@ mod tests {
     fn nisar_flood_clamps_sub_water_floor_to_one() {
         // total below the 1e-6 eps floor -> sigma_db = -60 dB -> clamp 1.0
         let (hh, hv) = grid(1e-7, 1e-7);
-        let res = run_pipeline_sar(hh, hv, 40.0, "NISAR_FLOOD");
+        let res = run_pipeline_sar(hh, hv, 40.0, "NISAR_FLOOD", None);
         assert_eq!(res.mean, Some(1.0));
     }
 
@@ -417,7 +426,7 @@ mod tests {
     fn nisar_flood_excludes_nodata_pixels() {
         // All-zero GCOV pixels are nodata: masked out of stats entirely.
         let (hh, hv) = grid(0.0, 0.0);
-        let res = run_pipeline_sar(hh, hv, 40.0, "NISAR_FLOOD");
+        let res = run_pipeline_sar(hh, hv, 40.0, "NISAR_FLOOD", None);
         assert_eq!(res.sample_count, 0);
         assert_eq!(res.mean, None);
         assert_eq!(res.valid_pixel_fraction, 0.0);
@@ -432,10 +441,45 @@ mod tests {
         hv[[0, 0]] = 1e-4;
         hh[[1, 1]] = 1e-4;
         hv[[1, 1]] = 1e-4;
-        let res = run_pipeline_sar(hh, hv, 40.0, "NISAR_FLOOD");
+        let res = run_pipeline_sar(hh, hv, 40.0, "NISAR_FLOOD", None);
         assert_eq!(res.sample_count, 2);
         assert_eq!(res.mean, Some(1.0));
         assert!((res.valid_pixel_fraction - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn geometry_mask_excludes_outside_pixels() {
+        // Uniform wet 2x2 scene; mask keeps the left column only.
+        // Stats must cover the two inside pixels and the fraction
+        // denominator stays the full four-pixel window (matching
+        // Python's apply_geometry_mask -> NaN -> invalid semantics).
+        let (hh, hv) = grid(1e-4, 1e-4);
+        let mask = Array2::from_shape_vec((2, 2), vec![true, false, true, false]).unwrap();
+        let res = run_pipeline_sar(hh, hv, 40.0, "NISAR_FLOOD", Some(mask));
+        assert_eq!(res.sample_count, 2);
+        assert_eq!(res.mean, Some(1.0));
+        assert!((res.valid_pixel_fraction - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn cband_geometry_mask_excludes_outside_pixels() {
+        // C-band path shares the same mask-AND; only counts matter
+        // here (mean depends on the RVI formula).
+        let vv = Array2::from_elem((2, 2), 1e-4_f32);
+        let vh = Array2::from_elem((2, 2), 1e-4_f32);
+        let mask = Array2::from_shape_vec((2, 2), vec![true, true, false, false]).unwrap();
+        let res = run_pipeline(vv, vh, 45.0, "RVI", 0.7, -0.3, 0.5, Some(mask));
+        assert_eq!(res.sample_count, 2);
+        assert!((res.valid_pixel_fraction - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn geometry_mask_none_keeps_whole_bbox() {
+        // No mask -> all nodata-valid pixels counted (legacy behaviour).
+        let (hh, hv) = grid(1e-4, 1e-4);
+        let res = run_pipeline_sar(hh, hv, 40.0, "NISAR_FLOOD", None);
+        assert_eq!(res.sample_count, 4);
+        assert!((res.valid_pixel_fraction - 1.0).abs() < 1e-6);
     }
 
     #[test]
@@ -456,7 +500,7 @@ mod tests {
         let mut hv = Array2::from_elem((3, 3), 0.01_f32);
         hh[[1, 1]] = 0.03;
         hv[[1, 1]] = 0.03;
-        let res = run_pipeline_sar(hh, hv, 40.0, "NISAR_FLOOD");
+        let res = run_pipeline_sar(hh, hv, 40.0, "NISAR_FLOOD", None);
         let mean = res.mean.expect("mean");
         assert!(
             (mean - 0.94364).abs() < 2e-3,
@@ -476,7 +520,7 @@ mod tests {
         // would score exactly 0.5, RTC-normalized scores lower.
         let total = 10.0_f32.powf(-1.6);
         let (hh, hv) = grid(total, total);
-        let res = run_pipeline_sar(hh, hv, 33.0, "NISAR_FLOOD");
+        let res = run_pipeline_sar(hh, hv, 33.0, "NISAR_FLOOD", None);
         let c = 33.0_f32.to_radians().cos() / 40.0_f32.to_radians().cos();
         let sigma_db = 10.0 * (total * c).log10();
         let expected = f64::from((-12.0_f32 - sigma_db) / 8.0).clamp(0.0, 1.0);
@@ -496,19 +540,19 @@ mod tests {
         // Bright HH (dry edge, -12 dB) with water-dark HV (-50 dB):
         // HH-only -> ~0.0; mean(HH,HV) would score ~0.375 (wet-biased).
         let (hh, hv) = grid(10.0_f32.powf(-1.2), 1e-5);
-        let res = run_pipeline_sar(hh, hv, 40.0, "NISAR_FLOOD");
+        let res = run_pipeline_sar(hh, hv, 40.0, "NISAR_FLOOD", None);
         let mean = res.mean.expect("mean");
         assert!(mean.abs() < 1e-5, "expected ~0.0, got {mean}");
         // Water-dark HH with bright HV must still score fully wet.
         let (hh, hv) = grid(1e-5, 10.0_f32.powf(-0.8));
-        let res = run_pipeline_sar(hh, hv, 40.0, "NISAR_FLOOD");
+        let res = run_pipeline_sar(hh, hv, 40.0, "NISAR_FLOOD", None);
         assert_eq!(res.mean, Some(1.0));
     }
 
     #[test]
     fn l_rvi_path_unchanged_by_flood_branch() {
         let (hh, hv) = grid(0.4, 0.2);
-        let res = run_pipeline_sar(hh, hv, 40.0, "L_RVI");
+        let res = run_pipeline_sar(hh, hv, 40.0, "L_RVI", None);
         // L_RVI = 4*0.2/(0.4+0.2) = 1.333... at theta=40 (no correction)
         let mean = res.mean.expect("mean");
         let expected = f64::from(4.0_f32 * 0.2 / 0.6);

@@ -132,6 +132,13 @@ pub struct ComputeRequest {
     pub gamma: Option<f32>,
     #[serde(default)]
     pub orbit_state: Option<String>,
+    /// Optional farm-polygon mask (`true` = pixel inside the farm).
+    /// When present its length must equal `width * height`; pixels
+    /// outside the polygon are excluded from statistics exactly like
+    /// nodata. Sent by Django so Rust-side stats match the Python
+    /// `apply_geometry_mask` fallback path.
+    #[serde(default)]
+    pub mask: Option<Vec<bool>>,
 }
 
 // ── Optical / spectral index models ──────────────────────────────────
