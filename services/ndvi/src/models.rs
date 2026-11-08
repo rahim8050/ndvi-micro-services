@@ -162,6 +162,13 @@ pub struct SpectralRequest {
     /// Nodata value (pixels at or below this are masked). Default 0.0.
     #[serde(default)]
     pub nodata: Option<f32>,
+    /// Optional farm-polygon mask (`true` = pixel inside the farm).
+    /// When present its length must equal `width * height`; pixels
+    /// outside the polygon are excluded from statistics. Sent by
+    /// Django so Rust-side stats match the Python apply_geometry_mask
+    /// fallback path.
+    #[serde(default)]
+    pub mask: Option<Vec<bool>>,
 }
 
 #[derive(Debug, serde::Serialize)]

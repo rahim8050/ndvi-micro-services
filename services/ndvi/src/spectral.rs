@@ -59,9 +59,24 @@ pub fn run_pipeline_spectral(req: &SpectralRequest) -> Result<SpectralResponse, 
         mask
     };
 
-    // Combined valid mask: not nodata AND not cloud.
+    // Combined valid mask: not nodata AND not cloud AND inside farm.
+    let geometry_mask = match &req.mask {
+        Some(vals) => {
+            if vals.len() != expected {
+                return Err(format!(
+                    "mask: expected {} elements, got {}",
+                    expected,
+                    vals.len()
+                ));
+            }
+            Array2::from_shape_vec((req.height, req.width), vals.clone())
+                .map_err(|e| format!("mask: shape error: {}", e))?
+        }
+        None => Array2::from_elem((req.height, req.width), true),
+    };
     let mut valid_mask = cloud_mask.mapv(|c| !c);
     ndarray::azip!((v in &mut valid_mask, &n in &nodata_mask) *v = *v && !n);
+    ndarray::azip!((v in &mut valid_mask, &m in &geometry_mask) *v = *v && m);
 
     // Normalise reflectance bands from 0–10000 to 0–1 when needed.
     // Sentinel-2 L2A surface reflectance is stored as uint16 in the
@@ -255,6 +270,7 @@ mod tests {
             cloud_mask: None,
             cloud_threshold: None,
             nodata: None,
+            mask: None,
         }
     }
 
@@ -323,6 +339,41 @@ mod tests {
         bands.insert("B08".into(), vec![0.5, 0.6]); // 2 elements, but 2x2=4 expected
         bands.insert("B04".into(), vec![0.2, 0.2, 0.1, 0.1]);
         let req = base_request("NDVI", bands);
+        let res = run_pipeline_spectral(&req);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_geometry_mask_excludes_outside_pixels() {
+        let mut bands = HashMap::new();
+        bands.insert("B08".into(), vec![0.5, 0.6, 0.3, 0.4]);
+        bands.insert("B04".into(), vec![0.2, 0.2, 0.1, 0.1]);
+        let mut req = base_request("NDVI", bands);
+        req.mask = Some(vec![true, false, true, false]); // left column inside
+        let res = run_pipeline_spectral(&req).unwrap();
+        assert_eq!(res.sample_count, 2);
+        assert!((res.valid_pixel_fraction - 0.5).abs() < 1e-6);
+        // Geometry must not leak into cloud_fraction (cloud-only metric).
+        assert_eq!(res.cloud_fraction, 0.0);
+    }
+
+    #[test]
+    fn test_geometry_mask_none_keeps_whole_tile() {
+        let mut bands = HashMap::new();
+        bands.insert("B08".into(), vec![0.5, 0.6, 0.3, 0.4]);
+        bands.insert("B04".into(), vec![0.2, 0.2, 0.1, 0.1]);
+        let req = base_request("NDVI", bands);
+        let res = run_pipeline_spectral(&req).unwrap();
+        assert_eq!(res.sample_count, 4);
+    }
+
+    #[test]
+    fn test_geometry_mask_length_mismatch_errors() {
+        let mut bands = HashMap::new();
+        bands.insert("B08".into(), vec![0.5, 0.6, 0.3, 0.4]);
+        bands.insert("B04".into(), vec![0.2, 0.2, 0.1, 0.1]);
+        let mut req = base_request("NDVI", bands);
+        req.mask = Some(vec![true, false]);
         let res = run_pipeline_spectral(&req);
         assert!(res.is_err());
     }
