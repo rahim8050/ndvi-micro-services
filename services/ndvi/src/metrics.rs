@@ -81,12 +81,22 @@ pub async fn metrics_middleware(req: Request<Body>, next: Next) -> Response {
         .get::<MatchedPath>()
         .map(|matched| matched.as_str().to_owned())
         .unwrap_or_else(|| req.uri().path().to_owned());
+    let started = std::time::Instant::now();
     let response = next.run(req).await;
-    let status = response.status().as_u16().to_string();
+    let status = response.status().as_u16();
+    let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
 
     HTTP_REQUESTS
-        .with_label_values(&[method.as_str(), path.as_str(), status.as_str()])
+        .with_label_values(&[method.as_str(), path.as_str(), status.to_string().as_str()])
         .inc();
+
+    tracing::info!(
+        method = %method,
+        path = %path,
+        status,
+        elapsed_ms = format!("{elapsed_ms:.2}"),
+        "request"
+    );
 
     response
 }
