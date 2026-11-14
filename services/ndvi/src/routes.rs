@@ -14,7 +14,9 @@ use crate::{
     cog_reader::CogReader,
     db::AppState,
     metrics,
-    models::{ComputeRequest, NdviInput, PreprocessRequest, SpectralRequest},
+    models::{
+        ComputeRequest, NdviInput, PreprocessRequest, SpectralRequest, StatsRequest, StatsResponse,
+    },
     pipeline::{run_pipeline, run_pipeline_sar},
     spectral::run_pipeline_spectral,
 };
@@ -39,6 +41,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/v1/compute", post(compute))
         .route("/api/v1/spectral", post(spectral))
+        .route("/api/v1/stats", post(stats))
         .route_layer(middleware::from_fn(metrics::metrics_middleware))
         .with_state(state)
 }
@@ -359,6 +362,101 @@ async fn compute(Json(payload): Json<ComputeRequest>) -> Response {
         .into_response()
 }
 
+/// Compute sample statistics (mode) over a numeric series offloaded
+/// from Django for faster processing than pure-Python counting.
+async fn stats(Json(payload): Json<StatsRequest>) -> Response {
+    let start = std::time::Instant::now();
+    let values = payload.values;
+    let round_decimals = payload.round_decimals;
+
+    let result =
+        tokio::task::spawn_blocking(move || compute_mode_stats(&values, round_decimals)).await;
+
+    let stats = match result {
+        Ok(s) => s,
+        Err(err) => {
+            tracing::error!(error = ?err, "blocking stats task failed");
+            let body = Envelope::failure(
+                "Internal Error",
+                Some(json!({"detail": "stats computation failed"})),
+            );
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response();
+        }
+    };
+
+    let mut stats = stats;
+    stats.processing_ms = start.elapsed().as_secs_f64() * 1000.0;
+
+    (
+        StatusCode::OK,
+        Json(Envelope::success(
+            "OK",
+            serde_json::to_value(&stats).unwrap_or_default(),
+        )),
+    )
+        .into_response()
+}
+
+/// Frequency-based mode. Optional decimal rounding collapses float noise.
+fn compute_mode_stats(values: &[f64], round_decimals: Option<u32>) -> StatsResponse {
+    use std::collections::HashMap;
+
+    let round = |v: f64| -> f64 {
+        match round_decimals {
+            Some(d) if d <= 12 => {
+                let f = 10f64.powi(d as i32);
+                (v * f).round() / f
+            }
+            _ => v,
+        }
+    };
+
+    let mut counts: HashMap<u64, (f64, u64)> = HashMap::new();
+    // Map bit-pattern -> (display value, count) so -0.0/0.0 unify via round().
+    let mut sample_count = 0u64;
+
+    for &raw in values {
+        if !raw.is_finite() {
+            continue;
+        }
+        let r = round(raw);
+        let key = r.to_bits();
+        let entry = counts.entry(key).or_insert((r, 0));
+        entry.1 += 1;
+        sample_count += 1;
+    }
+
+    if counts.is_empty() {
+        return StatsResponse {
+            mode: None,
+            mode_count: 0,
+            sample_count: 0,
+            unique_count: 0,
+            multimodal: false,
+            modes: vec![],
+            processing_ms: 0.0,
+        };
+    }
+
+    let max_count = counts.values().map(|(_, c)| *c).max().unwrap_or(0);
+    let mut modes: Vec<f64> = counts
+        .values()
+        .filter(|(_, c)| *c == max_count)
+        .map(|(v, _)| *v)
+        .collect();
+    modes.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    StatsResponse {
+        mode: modes.first().copied(),
+        mode_count: max_count,
+        sample_count,
+        unique_count: counts.len() as u64,
+        multimodal: modes.len() > 1,
+        modes,
+        processing_ms: 0.0,
+    }
+}
+
 async fn spectral(Json(payload): Json<SpectralRequest>) -> Response {
     let start = std::time::Instant::now();
     let result = match tokio::task::spawn_blocking(move || run_pipeline_spectral(&payload)).await {
@@ -383,4 +481,45 @@ async fn spectral(Json(payload): Json<SpectralRequest>) -> Response {
         Json(Envelope::success("OK", serde_json::json!(result))),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod stats_tests {
+    use super::compute_mode_stats;
+
+    #[test]
+    fn mode_exact_match() {
+        let res = compute_mode_stats(&[1.0, 2.0, 2.0, 3.0], None);
+        assert_eq!(res.mode, Some(2.0));
+        assert_eq!(res.mode_count, 2);
+        assert!(!res.multimodal);
+        assert_eq!(res.sample_count, 4);
+    }
+
+    #[test]
+    fn mode_rounding_collapses_float_noise() {
+        let res = compute_mode_stats(&[-11.8500001, -11.8499999, -12.0], Some(2));
+        assert_eq!(res.mode, Some(-11.85));
+        assert_eq!(res.mode_count, 2);
+        assert_eq!(res.unique_count, 2);
+    }
+
+    #[test]
+    fn mode_multimodal_tie() {
+        let res = compute_mode_stats(&[1.0, 1.0, 2.0, 2.0], None);
+        assert!(res.multimodal);
+        assert_eq!(res.modes, vec![1.0, 2.0]);
+        assert_eq!(res.mode_count, 2);
+    }
+
+    #[test]
+    fn mode_empty_and_nonfinite() {
+        let res = compute_mode_stats(&[], Some(2));
+        assert_eq!(res.mode, None);
+        assert_eq!(res.sample_count, 0);
+
+        let res = compute_mode_stats(&[f64::NAN, f64::INFINITY, 1.0], Some(2));
+        assert_eq!(res.mode, Some(1.0));
+        assert_eq!(res.sample_count, 1);
+    }
 }

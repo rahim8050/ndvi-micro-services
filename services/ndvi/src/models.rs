@@ -181,3 +181,34 @@ pub struct SpectralResponse {
     pub valid_pixel_fraction: f64,
     pub processing_ms: f64,
 }
+
+// ── Sample statistics (mode etc.) ────────────────────────────────────
+
+/// Request for sample-level statistics over a flat numeric series
+/// (e.g. S1_SMI observation means for one farm).
+#[derive(Debug, Deserialize)]
+pub struct StatsRequest {
+    /// Sample values. Non-finite entries are ignored.
+    pub values: Vec<f64>,
+    /// Round each value to this many decimal places before counting
+    /// frequencies (float series rarely match exactly). `None` = exact.
+    #[serde(default)]
+    pub round_decimals: Option<u32>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct StatsResponse {
+    /// Most frequent value after optional rounding.
+    pub mode: Option<f64>,
+    /// How many times `mode` occurred.
+    pub mode_count: u64,
+    /// Finite samples used.
+    pub sample_count: u64,
+    /// Distinct values after optional rounding.
+    pub unique_count: u64,
+    /// True when multiple values tie for highest frequency.
+    pub multimodal: bool,
+    /// All modes (ties), ascending — empty when no samples.
+    pub modes: Vec<f64>,
+    pub processing_ms: f64,
+}
