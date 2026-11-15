@@ -9,7 +9,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # Pinned: rustc 1.100.0 (2026-11-09) changed type inference
+      # (rust-lang/rust#148922) and fails to compile sqlx-postgres
+      # 0.7.4 (E0277 `!: Decode`). Revisit once sqlx ships a
+      # release that builds on current stable.
+      - uses: dtolnay/rust-toolchain@1.99.1
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2

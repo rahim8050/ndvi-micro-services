@@ -51,6 +51,12 @@ jobs:
           set -euo pipefail
           docker build -f Dockerfile.weather -t weather-service:${{ steps.vars.outputs.image_tag }} .
 
+      # Pinned to match ci.yml: rustc 1.100.0 fails to compile
+      # sqlx-postgres 0.7.4 (rust-lang/rust#148922). Docker builds
+      # are unaffected (Dockerfile pins rust:1.88).
+      - name: Install Rust toolchain (pinned)
+        uses: dtolnay/rust-toolchain@1.99.1
+
       - name: Run unit tests
         run: |
           set -euo pipefail
