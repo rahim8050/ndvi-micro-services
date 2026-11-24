@@ -46,7 +46,7 @@ pub fn run_pipeline(
         gamma,
     );
 
-    compute_stats(&index, &valid_mask)
+    compute_stats(&index, &valid_mask, geometry_mask.as_ref())
 }
 
 /// Pipeline for L-band SAR indices (L_RVI, NISAR_FLOOD) using HH/HV bands.
@@ -85,7 +85,7 @@ pub fn run_pipeline_sar(
 
     let index = compute_index_sar(&hh_filtered, &hv_filtered, angle, index_type);
 
-    compute_stats(&index, &valid_mask)
+    compute_stats(&index, &valid_mask, geometry_mask.as_ref())
 }
 
 fn mask_nodata(arr: &Array2<f32>) -> (Array2<f32>, Array2<bool>) {
@@ -344,23 +344,38 @@ fn compute_index_sar(
     }
 }
 
-fn compute_stats(index: &Array2<f32>, mask: &Array2<bool>) -> PreprocessResponse {
+fn compute_stats(
+    index: &Array2<f32>,
+    mask: &Array2<bool>,
+    geometry_mask: Option<&Array2<bool>>,
+) -> PreprocessResponse {
     let mut sum = 0.0;
     let mut min = f32::MAX;
     let mut max = f32::MIN;
     let mut count = 0;
 
     ndarray::azip!((&v in index, &m in mask) {
-        if m && !v.is_nan() {
-            sum += v;
-            if v < min { min = v; }
-            if v > max { max = v; }
-            count += 1;
+        if m {
+            if !v.is_nan() {
+                sum += v;
+                if v < min { min = v; }
+                if v > max { max = v; }
+                count += 1;
+            }
         }
     });
 
-    let total = index.len() as f64;
-    let fraction = (count as f64) / total;
+    // Normalize by the farm footprint, not the padded raster window. The
+    // validity mask is the VV∩VH∩geometry intersection, so retain the
+    // geometry mask separately for the denominator.
+    let total = geometry_mask
+        .map(|mask| mask.iter().filter(|&&inside| inside).count())
+        .unwrap_or_else(|| index.len()) as f64;
+    let fraction = if total > 0.0 {
+        (count as f64) / total
+    } else {
+        0.0
+    };
 
     PreprocessResponse {
         mean: if count > 0 {
@@ -450,15 +465,14 @@ mod tests {
     #[test]
     fn geometry_mask_excludes_outside_pixels() {
         // Uniform wet 2x2 scene; mask keeps the left column only.
-        // Stats must cover the two inside pixels and the fraction
-        // denominator stays the full four-pixel window (matching
-        // Python's apply_geometry_mask -> NaN -> invalid semantics).
+        // Stats must cover the two inside pixels and the fraction is
+        // normalized by the two-pixel geometry footprint.
         let (hh, hv) = grid(1e-4, 1e-4);
         let mask = Array2::from_shape_vec((2, 2), vec![true, false, true, false]).unwrap();
         let res = run_pipeline_sar(hh, hv, 40.0, "NISAR_FLOOD", Some(mask));
         assert_eq!(res.sample_count, 2);
         assert_eq!(res.mean, Some(1.0));
-        assert!((res.valid_pixel_fraction - 0.5).abs() < 1e-6);
+        assert!((res.valid_pixel_fraction - 1.0).abs() < 1e-6);
     }
 
     #[test]
@@ -470,7 +484,7 @@ mod tests {
         let mask = Array2::from_shape_vec((2, 2), vec![true, true, false, false]).unwrap();
         let res = run_pipeline(vv, vh, 45.0, "RVI", 0.7, -0.3, 0.5, Some(mask));
         assert_eq!(res.sample_count, 2);
-        assert!((res.valid_pixel_fraction - 0.5).abs() < 1e-6);
+        assert!((res.valid_pixel_fraction - 1.0).abs() < 1e-6);
     }
 
     #[test]
