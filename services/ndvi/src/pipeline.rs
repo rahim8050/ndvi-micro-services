@@ -355,13 +355,11 @@ fn compute_stats(
     let mut count = 0;
 
     ndarray::azip!((&v in index, &m in mask) {
-        if m {
-            if !v.is_nan() {
-                sum += v;
-                if v < min { min = v; }
-                if v > max { max = v; }
-                count += 1;
-            }
+        if m && !v.is_nan() {
+            sum += v;
+            if v < min { min = v; }
+            if v > max { max = v; }
+            count += 1;
         }
     });
 
