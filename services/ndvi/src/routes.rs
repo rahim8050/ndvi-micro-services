@@ -14,8 +14,10 @@ use crate::{
     cog_reader::CogReader,
     db::AppState,
     metrics,
+    lst::run_pipeline_lst,
     models::{
-        ComputeRequest, NdviInput, PreprocessRequest, SpectralRequest, StatsRequest, StatsResponse,
+        ComputeRequest, LstRequest, NdviInput, PreprocessRequest, SpectralRequest, StatsRequest,
+        StatsResponse,
     },
     pipeline::{run_pipeline, run_pipeline_sar},
     spectral::run_pipeline_spectral,
@@ -41,6 +43,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/v1/compute", post(compute))
         .route("/api/v1/spectral", post(spectral))
+        .route("/api/v1/lst", post(lst))
         .route("/api/v1/stats", post(stats))
         .route_layer(middleware::from_fn(metrics::metrics_middleware))
         .with_state(state)
@@ -475,6 +478,35 @@ async fn spectral(Json(payload): Json<SpectralRequest>) -> Response {
         }
     };
     metrics::observe_spectral(start.elapsed().as_secs_f64());
+
+    (
+        StatusCode::OK,
+        Json(Envelope::success("OK", serde_json::json!(result))),
+    )
+        .into_response()
+}
+
+/// LST zonal statistics (mean/min/max) over a temperature grid that
+/// Django already downloaded and extracted. Offloads the pixel scan
+/// from the Python worker; falls back to Python numpy on HTTP error.
+async fn lst(Json(payload): Json<LstRequest>) -> Response {
+    let start = std::time::Instant::now();
+    let result = match tokio::task::spawn_blocking(move || run_pipeline_lst(&payload)).await {
+        Ok(Ok(res)) => res,
+        Ok(Err(err)) => {
+            let body = Envelope::failure("Validation error", Some(json!({"detail": err})));
+            return (StatusCode::BAD_REQUEST, Json(body)).into_response();
+        }
+        Err(err) => {
+            tracing::error!(error = ?err, "blocking lst task failed");
+            let body = Envelope::failure(
+                "Internal Error",
+                Some(json!({"detail": "lst computation failed"})),
+            );
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response();
+        }
+    };
+    metrics::observe_lst(start.elapsed().as_secs_f64());
 
     (
         StatusCode::OK,

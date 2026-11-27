@@ -182,6 +182,34 @@ pub struct SpectralResponse {
     pub processing_ms: f64,
 }
 
+// ── Land Surface Temperature (LST) zonal stats ───────────────────────
+
+/// Request for LST zonal statistics over a flat temperature grid.
+/// Python downloads/opens the product and ships the extracted LST
+/// array; Rust only computes mean/min/max over valid pixels.
+#[derive(Debug, Deserialize)]
+pub struct LstRequest {
+    /// Flattened LST values (row-major, Kelvin). `null` (or NaN)
+    /// marks invalid pixels — JSON has no NaN token, so Django sends
+    /// nulls for non-finite samples.
+    pub values: Vec<Option<f32>>,
+    pub width: usize,
+    pub height: usize,
+    /// Optional farm-polygon mask (`true` = pixel inside the farm).
+    /// Length must equal `width * height` when present.
+    #[serde(default)]
+    pub mask: Option<Vec<bool>>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct LstResponse {
+    pub mean: Option<f64>,
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+    pub sample_count: u64,
+    pub processing_ms: f64,
+}
+
 // ── Sample statistics (mode etc.) ────────────────────────────────────
 
 /// Request for sample-level statistics over a flat numeric series

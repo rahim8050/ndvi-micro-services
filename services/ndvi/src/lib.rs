@@ -15,6 +15,7 @@ use tracing_subscriber::{fmt, EnvFilter};
 
 pub mod cog_reader;
 pub mod db;
+pub mod lst;
 pub mod metrics;
 pub mod models;
 pub mod pipeline;

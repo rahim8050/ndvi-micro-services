@@ -46,6 +46,22 @@ static SAR_PROCESSING_SECONDS: Lazy<Histogram> = Lazy::new(|| {
     histogram
 });
 
+static LST_PROCESSING_SECONDS: Lazy<Histogram> = Lazy::new(|| {
+    let opts = HistogramOpts::new(
+        "ndvi_lst_compute_seconds",
+        "Rust LST zonal stats computation time (seconds)",
+    )
+    .buckets(vec![
+        0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+    ]);
+    let histogram =
+        Histogram::with_opts(opts).expect("ndvi_lst_compute_seconds metric can be created");
+    prometheus::default_registry()
+        .register(Box::new(histogram.clone()))
+        .expect("ndvi_lst_compute_seconds can be registered");
+    histogram
+});
+
 static PREPROCESS_SECONDS: Lazy<Histogram> = Lazy::new(|| {
     let opts = HistogramOpts::new(
         "ndvi_preprocess_seconds",
@@ -64,6 +80,10 @@ static PREPROCESS_SECONDS: Lazy<Histogram> = Lazy::new(|| {
 
 pub fn observe_spectral(seconds: f64) {
     SPECTRAL_PROCESSING_SECONDS.observe(seconds);
+}
+
+pub fn observe_lst(seconds: f64) {
+    LST_PROCESSING_SECONDS.observe(seconds);
 }
 
 pub fn observe_sar(seconds: f64) {
