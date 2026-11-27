@@ -13,8 +13,8 @@ use tower::limit::ConcurrencyLimitLayer;
 use crate::{
     cog_reader::CogReader,
     db::AppState,
-    metrics,
     lst::run_pipeline_lst,
+    metrics,
     models::{
         ComputeRequest, LstRequest, NdviInput, PreprocessRequest, SpectralRequest, StatsRequest,
         StatsResponse,

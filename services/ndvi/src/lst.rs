@@ -67,10 +67,7 @@ pub fn run_pipeline_lst(req: &LstRequest) -> Result<LstResponse, String> {
 }
 
 /// Sum / min / max / count of finite pixels inside the mask.
-fn compute_lst_stats(
-    values: &Array2<f32>,
-    mask: &Array2<bool>,
-) -> (f64, f32, f32, u64) {
+fn compute_lst_stats(values: &Array2<f32>, mask: &Array2<bool>) -> (f64, f32, f32, u64) {
     let mut sum = 0.0_f64;
     let mut min = f32::MAX;
     let mut max = f32::MIN;
@@ -92,11 +89,7 @@ fn compute_lst_stats(
 mod tests {
     use super::*;
 
-    fn base_request(
-        values: Vec<Option<f32>>,
-        width: usize,
-        height: usize,
-    ) -> LstRequest {
+    fn base_request(values: Vec<Option<f32>>, width: usize, height: usize) -> LstRequest {
         LstRequest {
             values,
             width,
@@ -123,11 +116,7 @@ mod tests {
 
     #[test]
     fn test_nan_excluded() {
-        let req = base_request(
-            vec![Some(300.0), None, Some(302.0), None],
-            2,
-            2,
-        );
+        let req = base_request(vec![Some(300.0), None, Some(302.0), None], 2, 2);
         let res = run_pipeline_lst(&req).unwrap();
         assert_eq!(res.sample_count, 2);
         let mean = res.mean.unwrap();
